@@ -1,0 +1,9 @@
+node_modules
+dist
+.codex
+.env
+.env.local
+.DS_Store
+*.log
+*.local
+fat-cat-nano-banana-2.jpg
