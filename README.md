@@ -22,7 +22,8 @@ Open `http://127.0.0.1:5173`.
 - API key input and model access test
 - Text-to-image prompt composer
 - Model, aspect ratio, image size, and count controls
-- Face, outfit, style, and source image references
+- Multi-image custom edit references
+- Face, outfit, style, and source image references for dedicated workflows
 - Gallery, modal preview, and download
 - Local-only optional API key save
 

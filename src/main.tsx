@@ -84,13 +84,14 @@ const features: FeatureConfig[] = [
   },
   {
     id: "edit",
-    label: "Image Edit",
-    subtitle: "Edit one image with instructions",
+    label: "Custom Edit",
+    subtitle: "Prompt with multiple references",
     icon: Brush,
-    slots: [{ key: "source", label: "Source image", help: "Edit this image", role: "source", large: true }],
-    promptLabel: "Edit instruction",
-    placeholder: "Example: Change the background to a clean studio, keep the subject unchanged.",
-    cta: "Edit image",
+    slots: [{ key: "source", label: "Reference images", help: "Upload references", role: "source", large: true }],
+    promptLabel: "Custom edit prompt",
+    placeholder:
+      "Example: Use image 1 as the main subject, image 2 for the outfit, and image 3 for the background style. Create one realistic final image.",
+    cta: "Generate custom edit",
   },
   {
     id: "ecommerce",
@@ -149,6 +150,7 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [slotImages, setSlotImages] = useState<Partial<Record<SlotKey, ReferenceImage>>>({});
   const [studioBatchImages, setStudioBatchImages] = useState<ReferenceImage[]>([]);
+  const [editReferenceImages, setEditReferenceImages] = useState<ReferenceImage[]>([]);
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [batchExpanded, setBatchExpanded] = useState(false);
   const [results, setResults] = useState<GeneratedImage[]>([]);
@@ -180,6 +182,7 @@ function App() {
   useEffect(() => {
     setSlotImages({});
     setStudioBatchImages([]);
+    setEditReferenceImages([]);
     setPrompt(activeFeature === "create" ? randomPrompt() : "");
   }, [activeFeature]);
 
@@ -234,6 +237,12 @@ function App() {
 
   async function handleSlotFile(files: FileList | null, slot: FeatureConfig["slots"][number]) {
     if (!files?.length) return;
+    if (activeFeature === "edit" && slot.key === "source") {
+      const references = await Promise.all(Array.from(files).map((file) => fileToReference(file, slot.role)));
+      setEditReferenceImages((current) => [...current, ...references]);
+      return;
+    }
+
     if (activeFeature === "studio" && slot.key === "source") {
       const references = await Promise.all(Array.from(files).map((file) => fileToReference(file, slot.role)));
       setStudioBatchImages((current) => [...current, ...references]);
@@ -322,6 +331,36 @@ function App() {
     setBatchExpanded(false);
 
     try {
+      if (activeFeature === "edit" && editReferenceImages.length > 0) {
+        const taskId = crypto.randomUUID();
+        setBatch({
+          id: `edit-${Date.now()}`,
+          title: feature.label,
+          tasks: [{ id: taskId, label: `${editReferenceImages.length} reference images`, status: "running" }],
+        });
+        setBatchExpanded(false);
+
+        try {
+          const output = await generateImage({
+            apiKey: apiKey.trim(),
+            model,
+            prompt: finalPrompt,
+            references: editReferenceImages,
+            aspectRatio,
+            imageSize,
+            count,
+          });
+          setResults((current) => [...output, ...current]);
+          updateTask(taskId, { status: "done", message: "Completed" });
+        } catch (err) {
+          updateTask(taskId, { status: "error", message: err instanceof Error ? err.message : "Failed" });
+          setError(err instanceof Error ? err.message : "Generation failed.");
+        } finally {
+          setIsGenerating(false);
+        }
+        return;
+      }
+
       const output = await generateImage({
         apiKey: apiKey.trim(),
         model,
@@ -396,10 +435,13 @@ function App() {
             activeFeature={activeFeature}
             slotImages={slotImages}
             studioBatchImages={studioBatchImages}
+            editReferenceImages={editReferenceImages}
             onFile={handleSlotFile}
             onRemove={removeSlotImage}
             onRemoveBatch={(id) => setStudioBatchImages((items) => items.filter((item) => item.id !== id))}
             onClearBatch={() => setStudioBatchImages([])}
+            onRemoveEditReference={(id) => setEditReferenceImages((items) => items.filter((item) => item.id !== id))}
+            onClearEditReferences={() => setEditReferenceImages([])}
           />
 
           {activeFeature === "ecommerce" && (
@@ -436,6 +478,8 @@ function App() {
             {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
             {activeFeature === "studio" && studioBatchImages.length
               ? `Run ${studioBatchImages.length} images in parallel`
+              : activeFeature === "edit" && editReferenceImages.length
+                ? `Generate from ${editReferenceImages.length} references`
               : isGenerating
                 ? "Generating..."
                 : feature.cta}
@@ -608,10 +652,13 @@ function FeatureInputs(props: {
   activeFeature: FeatureId;
   slotImages: Partial<Record<SlotKey, ReferenceImage>>;
   studioBatchImages: ReferenceImage[];
+  editReferenceImages: ReferenceImage[];
   onFile: (files: FileList | null, slot: FeatureConfig["slots"][number]) => void;
   onRemove: (slot: SlotKey) => void;
   onRemoveBatch: (id: string) => void;
   onClearBatch: () => void;
+  onRemoveEditReference: (id: string) => void;
+  onClearEditReferences: () => void;
 }) {
   if (props.activeFeature === "create") {
     return (
@@ -627,10 +674,17 @@ function FeatureInputs(props: {
       {props.feature.slots.map((slot) => {
         const image = props.slotImages[slot.key];
         const isStudioBatch = props.activeFeature === "studio" && slot.key === "source";
+        const isCustomEdit = props.activeFeature === "edit" && slot.key === "source";
         return (
           <div className={slot.large ? "slot-wrap large" : "slot-wrap"} key={slot.key}>
             <p className="section-label">{slot.label}</p>
-            <label className={image || (isStudioBatch && props.studioBatchImages.length) ? "upload-slot filled" : "upload-slot"}>
+            <label
+              className={
+                image || (isStudioBatch && props.studioBatchImages.length) || (isCustomEdit && props.editReferenceImages.length)
+                  ? "upload-slot filled"
+                  : "upload-slot"
+              }
+            >
               {isStudioBatch && props.studioBatchImages.length > 0 ? (
                 <>
                   <div className="batch-stack">
@@ -639,6 +693,15 @@ function FeatureInputs(props: {
                     ))}
                   </div>
                   <span>{props.studioBatchImages.length} images queued</span>
+                </>
+              ) : isCustomEdit && props.editReferenceImages.length > 0 ? (
+                <>
+                  <div className="batch-stack">
+                    {props.editReferenceImages.slice(0, 8).map((reference) => (
+                      <img key={reference.id} src={reference.dataUrl} alt={`${reference.name} preview`} />
+                    ))}
+                  </div>
+                  <span>{props.editReferenceImages.length} references attached</span>
                 </>
               ) : image ? (
                 <>
@@ -654,12 +717,18 @@ function FeatureInputs(props: {
               <input
                 type="file"
                 accept="image/*"
-                multiple={isStudioBatch}
+                multiple={isStudioBatch || isCustomEdit}
                 onChange={(event) => props.onFile(event.target.files, slot)}
               />
             </label>
             {isStudioBatch && props.studioBatchImages.length > 0 ? (
               <BatchThumbs images={props.studioBatchImages} onRemove={props.onRemoveBatch} onClear={props.onClearBatch} />
+            ) : isCustomEdit && props.editReferenceImages.length > 0 ? (
+              <BatchThumbs
+                images={props.editReferenceImages}
+                onRemove={props.onRemoveEditReference}
+                onClear={props.onClearEditReferences}
+              />
             ) : (
               image && (
                 <button className="remove-slot" onClick={() => props.onRemove(slot.key)}>
@@ -862,9 +931,10 @@ function composePrompt(feature: FeatureConfig, userPrompt: string) {
       ].join("\n");
     case "edit":
       return [
-        "TASK: Edit the source image according to the instruction.",
-        "Keep unchanged areas coherent and realistic. Preserve identity, pose, and lighting unless instructed otherwise.",
-        `EDIT: ${text}`,
+        "TASK: Create or edit one final image using all uploaded reference images.",
+        "Interpret the images in order as visual references. The user prompt defines which image provides the subject, outfit, background, style, pose, or object details.",
+        "Preserve important visual details from the referenced images when requested, and blend them into a coherent photorealistic result.",
+        `USER PROMPT: ${text}`,
       ].join("\n");
     case "ecommerce":
       return [
