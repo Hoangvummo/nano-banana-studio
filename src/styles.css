@@ -545,8 +545,13 @@ textarea:focus-visible {
   border-color: rgba(34, 197, 94, 0.28);
 }
 
-.batch-summary {
+.jobs-panel {
+  display: grid;
+  gap: 10px;
   margin-bottom: 18px;
+}
+
+.batch-summary {
   padding: 12px;
   background: rgba(10, 14, 23, 0.92);
   border: 1px solid rgba(34, 197, 94, 0.18);

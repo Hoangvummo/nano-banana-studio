@@ -51,10 +51,11 @@ interface BatchTask {
   source?: ReferenceImage;
 }
 
-interface BatchState {
+interface GenerationJob {
   id: string;
   title: string;
   tasks: BatchTask[];
+  createdAt: number;
 }
 
 const features: FeatureConfig[] = [
@@ -151,22 +152,19 @@ function App() {
   const [slotImages, setSlotImages] = useState<Partial<Record<SlotKey, ReferenceImage>>>({});
   const [studioBatchImages, setStudioBatchImages] = useState<ReferenceImage[]>([]);
   const [editReferenceImages, setEditReferenceImages] = useState<ReferenceImage[]>([]);
-  const [batch, setBatch] = useState<BatchState | null>(null);
-  const [batchExpanded, setBatchExpanded] = useState(false);
+  const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [expandedJobIds, setExpandedJobIds] = useState<string[]>([]);
   const [results, setResults] = useState<GeneratedImage[]>([]);
   const [galleryFilter, setGalleryFilter] = useState<"all" | "latest" | "errors">("all");
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [error, setError] = useState("");
   const [successToast, setSuccessToast] = useState("");
-  const [isGenerating, setIsGenerating] = useState(false);
 
   const feature = useMemo(() => features.find((item) => item.id === activeFeature)!, [activeFeature]);
   const detectedModels = STUDIO_MODELS.filter((item) => availableModels.includes(`models/${item.id}`));
   const refs = feature.slots.map((slot) => slotImages[slot.key]).filter((item): item is ReferenceImage => Boolean(item));
-  const runningCount = batch?.tasks.filter((task) => task.status === "running").length ?? 0;
-  const doneCount = batch?.tasks.filter((task) => task.status === "done").length ?? 0;
-  const failedTasks = batch?.tasks.filter((task) => task.status === "error") ?? [];
-  const latestResults = results.filter((image) => image.prompt.includes(batch?.id ?? "__none__"));
+  const latestJob = jobs[0];
+  const latestResults = results.filter((image) => image.prompt.includes(latestJob?.id ?? "__none__"));
   const visibleResults =
     galleryFilter === "latest" && latestResults.length ? latestResults : galleryFilter === "errors" ? [] : results;
 
@@ -185,15 +183,6 @@ function App() {
     setEditReferenceImages([]);
     setPrompt(activeFeature === "create" ? randomPrompt() : "");
   }, [activeFeature]);
-
-  useEffect(() => {
-    if (!batch || runningCount > 0 || failedTasks.length > 0) return;
-    const timer = window.setTimeout(() => {
-      setSuccessToast(`${doneCount}/${batch.tasks.length} tasks completed.`);
-      setBatch(null);
-    }, 1800);
-    return () => window.clearTimeout(timer);
-  }, [batch, doneCount, failedTasks.length, runningCount]);
 
   useEffect(() => {
     if (!successToast) return;
@@ -274,43 +263,50 @@ function App() {
       return;
     }
 
-    setError("");
-    setIsGenerating(true);
+    const jobFeature = feature;
+    const jobFeatureId = activeFeature;
+    const jobPrompt = finalPrompt;
+    const jobModel = model;
+    const jobAspectRatio = aspectRatio;
+    const jobImageSize = imageSize;
+    const jobCount = count;
+    const jobRefs = refs;
+    const jobEditRefs = editReferenceImages;
 
-    if (activeFeature === "studio") {
+    setError("");
+
+    if (jobFeatureId === "studio") {
       if (!images.length) {
         setError("Upload at least one image for Studio Cutout.");
-        setIsGenerating(false);
         return;
       }
 
-      const batchId = `batch-${Date.now()}`;
+      const batchId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const tasks: BatchTask[] = images.map((image) => ({
         id: crypto.randomUUID(),
         label: image.name,
         status: "running",
         source: image,
       }));
-      setBatch({ id: batchId, title: "Studio Cutout", tasks });
-      setBatchExpanded(false);
+      addJob({ id: batchId, title: "Studio Cutout", tasks, createdAt: Date.now() });
 
-      await Promise.all(
+      void Promise.all(
         images.map(async (source, index) => {
           const taskId = tasks[index].id;
           try {
             const output = await generateImage({
               apiKey: apiKey.trim(),
-              model,
+              model: jobModel,
               prompt: `${finalPrompt}\n\nBatch marker: ${batchId}`,
               references: [source],
-              aspectRatio,
-              imageSize,
+              aspectRatio: jobAspectRatio,
+              imageSize: jobImageSize,
               count: 1,
             });
             setResults((current) => [...output, ...current]);
-            updateTask(taskId, { status: "done", message: "Completed" });
+            updateTask(batchId, taskId, { status: "done", message: "Completed" });
           } catch (err) {
-            updateTask(taskId, {
+            updateTask(batchId, taskId, {
               status: "error",
               message: err instanceof Error ? err.message : "Failed",
             });
@@ -318,82 +314,77 @@ function App() {
         }),
       );
 
-      setIsGenerating(false);
       return;
     }
 
-    const taskId = crypto.randomUUID();
-    setBatch({
-      id: `single-${Date.now()}`,
-      title: feature.label,
-      tasks: [{ id: taskId, label: feature.label, status: "running" }],
-    });
-    setBatchExpanded(false);
+    const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const taskCount = Math.max(1, jobCount);
+    const taskRefs = jobFeatureId === "edit" && jobEditRefs.length > 0 ? jobEditRefs : jobRefs;
+    const tasks: BatchTask[] = Array.from({ length: taskCount }).map((_, index) => ({
+      id: crypto.randomUUID(),
+      label: taskCount > 1 ? `${jobFeature.label} ${index + 1}` : jobFeature.label,
+      status: "running",
+    }));
+    addJob({ id: jobId, title: jobFeature.label, tasks, createdAt: Date.now() });
 
-    try {
-      if (activeFeature === "edit" && editReferenceImages.length > 0) {
-        const taskId = crypto.randomUUID();
-        setBatch({
-          id: `edit-${Date.now()}`,
-          title: feature.label,
-          tasks: [{ id: taskId, label: `${editReferenceImages.length} reference images`, status: "running" }],
-        });
-        setBatchExpanded(false);
-
+    void Promise.all(
+      tasks.map(async (task) => {
         try {
           const output = await generateImage({
             apiKey: apiKey.trim(),
-            model,
-            prompt: finalPrompt,
-            references: editReferenceImages,
-            aspectRatio,
-            imageSize,
-            count,
+            model: jobModel,
+            prompt: `${jobPrompt}\n\nBatch marker: ${jobId}`,
+            references: taskRefs,
+            aspectRatio: jobAspectRatio,
+            imageSize: jobImageSize,
+            count: 1,
           });
           setResults((current) => [...output, ...current]);
-          updateTask(taskId, { status: "done", message: "Completed" });
+          updateTask(jobId, task.id, { status: "done", message: "Completed" });
         } catch (err) {
-          updateTask(taskId, { status: "error", message: err instanceof Error ? err.message : "Failed" });
+          updateTask(jobId, task.id, { status: "error", message: err instanceof Error ? err.message : "Failed" });
           setError(err instanceof Error ? err.message : "Generation failed.");
-        } finally {
-          setIsGenerating(false);
         }
-        return;
-      }
-
-      const output = await generateImage({
-        apiKey: apiKey.trim(),
-        model,
-        prompt: finalPrompt,
-        references: refs,
-        aspectRatio,
-        imageSize,
-        count,
-      });
-      setResults((current) => [...output, ...current]);
-      updateTask(taskId, { status: "done", message: "Completed" });
-    } catch (err) {
-      updateTask(taskId, { status: "error", message: err instanceof Error ? err.message : "Failed" });
-      setError(err instanceof Error ? err.message : "Generation failed.");
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  function updateTask(id: string, patch: Partial<BatchTask>) {
-    setBatch((current) =>
-      current
-        ? {
-            ...current,
-            tasks: current.tasks.map((task) => (task.id === id ? { ...task, ...patch } : task)),
-          }
-        : current,
+      }),
     );
   }
 
-  function retryFailed() {
-    const sources = failedTasks.map((task) => task.source).filter((item): item is ReferenceImage => Boolean(item));
-    if (sources.length) void handleGenerate(sources);
+  function addJob(job: GenerationJob) {
+    setJobs((current) => [job, ...current]);
+    setExpandedJobIds((current) => [job.id, ...current]);
+  }
+
+  function updateTask(jobId: string, taskId: string, patch: Partial<BatchTask>) {
+    setJobs((current) =>
+      current.map((job) =>
+        job.id === jobId
+          ? {
+              ...job,
+              tasks: job.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
+            }
+          : job,
+      ),
+    );
+  }
+
+  function retryFailed(jobId: string) {
+    const job = jobs.find((item) => item.id === jobId);
+    const sources = job?.tasks
+      .filter((task) => task.status === "error")
+      .map((task) => task.source)
+      .filter((item): item is ReferenceImage => Boolean(item));
+    if (sources?.length) void handleGenerate(sources);
+  }
+
+  function toggleJob(jobId: string) {
+    setExpandedJobIds((current) =>
+      current.includes(jobId) ? current.filter((id) => id !== jobId) : [jobId, ...current],
+    );
+  }
+
+  function dismissJob(jobId: string) {
+    setJobs((current) => current.filter((job) => job.id !== jobId));
+    setExpandedJobIds((current) => current.filter((id) => id !== jobId));
   }
 
   return (
@@ -474,14 +465,12 @@ function App() {
           </section>
 
           <StepLabel number="3" label="Run" />
-          <button className="generate-action" onClick={() => void handleGenerate()} disabled={isGenerating}>
-            {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
+          <button className="generate-action" onClick={() => void handleGenerate()}>
+            <Sparkles size={18} />
             {activeFeature === "studio" && studioBatchImages.length
               ? `Run ${studioBatchImages.length} images in parallel`
               : activeFeature === "edit" && editReferenceImages.length
                 ? `Generate from ${editReferenceImages.length} references`
-              : isGenerating
-                ? "Generating..."
                 : feature.cta}
           </button>
         </section>
@@ -551,14 +540,22 @@ function App() {
             onClear={() => setResults([])}
           />
 
-          {batch && (
-            <BatchSummary
-              batch={batch}
-              expanded={batchExpanded}
-              onToggle={() => setBatchExpanded((value) => !value)}
-              onDismiss={() => setBatch(null)}
-              onRetry={failedTasks.length ? retryFailed : undefined}
-            />
+          {jobs.length > 0 && (
+            <section className="jobs-panel" aria-label="Generation jobs">
+              {jobs.map((job) => {
+                const hasRetryableFailures = job.tasks.some((task) => task.status === "error" && task.source);
+                return (
+                  <BatchSummary
+                    key={job.id}
+                    batch={job}
+                    expanded={expandedJobIds.includes(job.id)}
+                    onToggle={() => toggleJob(job.id)}
+                    onDismiss={() => dismissJob(job.id)}
+                    onRetry={hasRetryableFailures ? () => retryFailed(job.id) : undefined}
+                  />
+                );
+              })}
+            </section>
           )}
 
           {visibleResults.length === 0 ? (
@@ -773,7 +770,7 @@ function StepLabel(props: { number: string; label: string }) {
 }
 
 function BatchSummary(props: {
-  batch: BatchState;
+  batch: GenerationJob;
   expanded: boolean;
   onToggle: () => void;
   onDismiss: () => void;
