@@ -4,7 +4,7 @@ export type ModelId =
   | "gemini-3-pro-image-preview"
   | "nano-banana-pro-preview";
 
-export type AspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
+export type AspectRatio = "auto" | "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 export type ImageSize = "1K" | "2K" | "4K";
 
 export interface StudioModel {

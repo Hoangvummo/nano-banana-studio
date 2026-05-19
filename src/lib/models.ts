@@ -23,7 +23,7 @@ export const STUDIO_MODELS: StudioModel[] = [
   },
 ];
 
-export const ASPECT_RATIOS: AspectRatio[] = ["1:1", "3:4", "4:3", "9:16", "16:9"];
+export const ASPECT_RATIOS: AspectRatio[] = ["auto", "1:1", "3:4", "4:3", "9:16", "16:9"];
 export const IMAGE_SIZES: ImageSize[] = ["1K", "2K", "4K"];
 
 export const DEFAULT_MODEL: ModelId = "gemini-3.1-flash-image-preview";

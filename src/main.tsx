@@ -197,12 +197,12 @@ function App() {
     }
     setApiStatus("checking");
     setError("");
-    setApiMessage("Checking image model access...");
+    setApiMessage("Preparing Vertex image model access...");
 
     try {
       const models = await listModels(apiKey.trim());
       const names = models.map((item) => item.name);
-      const imageModels = STUDIO_MODELS.filter((item) => names.includes(`models/${item.id}`));
+      const imageModels = STUDIO_MODELS.filter((item) => hasModelAccess(names, item.id));
       setAvailableModels(names);
 
       if (!imageModels.length) {
@@ -211,12 +211,12 @@ function App() {
         return;
       }
 
-      if (!names.includes(`models/${model}`)) setModel(imageModels[0].id);
+      if (!hasModelAccess(names, model)) setModel(imageModels[0].id);
       if (rememberKey) localStorage.setItem("nano-banana-api-key", apiKey.trim());
       else localStorage.removeItem("nano-banana-api-key");
 
       setApiStatus("ready");
-      setApiMessage(`${imageModels.length} image models available.`);
+      setApiMessage(`${imageModels.length} image models configured. Generate an image to verify API access.`);
     } catch (err) {
       setApiStatus("error");
       setApiMessage("Could not validate this API key.");
@@ -954,6 +954,10 @@ function composePrompt(feature: FeatureConfig, userPrompt: string) {
     default:
       return text;
   }
+}
+
+function hasModelAccess(names: string[], modelId: ModelId) {
+  return names.some((name) => name === modelId || name === `models/${modelId}` || name.endsWith(`/models/${modelId}`));
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
