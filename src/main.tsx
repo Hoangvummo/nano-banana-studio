@@ -923,8 +923,8 @@ function composePrompt(feature: FeatureConfig, userPrompt: string) {
       return [
         "TASK: Copy the environment, lighting, camera feel, and overall vibe from the style reference image.",
         "Preserve the model pose, body posture, crop, camera angle, and composition from the style reference image.",
-        "Use the outfit reference only for the garment shape, fabric, color, pattern, and fit.",
-        "Do not copy jewelry, watches, bags, hats, glasses, shoes, makeup, tattoos, or other accessories from the outfit reference.",
+        "Use the outfit reference only for the clothing and footwear: garment shape, fabric, color, pattern, fit, socks, and shoes.",
+        "Do not copy jewelry, watches, bags, hats, glasses, makeup, tattoos, or other non-clothing accessories from the outfit reference.",
         "Do not copy the face, body identity, pose, background, lighting, or camera style from the outfit reference.",
         "Use the face reference only for identity if provided.",
         "If no face reference is provided, preserve the face and identity from the style reference when it contains a person. Otherwise create a similar natural face that matches the style reference.",
