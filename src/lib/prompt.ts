@@ -35,7 +35,7 @@ export function buildReferenceInstruction(prompt: string, referenceCount: number
   if (referenceCount === 0) return prompt;
   return [
     "Use the attached reference images carefully.",
-    "Preserve identity only from face references, clothing only from outfit references, and environment/vibe only from style references.",
+    "When a face reference is attached, use it for facial appearance. Use clothing and footwear only from outfit references. Use environment/vibe only from style references.",
     "Make the final image realistic, naturally lit, and visually consistent.",
     "",
     prompt,

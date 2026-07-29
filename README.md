@@ -2,8 +2,8 @@
 
 BYOK image studio for Gemini image models:
 
-- Nano Banana 2: `gemini-3.1-flash-image-preview`
-- Nano Banana Pro: `gemini-3-pro-image-preview`
+- Nano Banana 2: `gemini-3.1-flash-image`
+- Nano Banana Pro: `gemini-3-pro-image`
 - Nano Banana: `gemini-2.5-flash-image`
 
 The app does not ship with an API key. Users paste their own key in the API panel and can test model access before generating.

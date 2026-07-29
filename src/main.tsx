@@ -257,7 +257,7 @@ function App() {
       return;
     }
 
-    const finalPrompt = composePrompt(feature, prompt);
+    const finalPrompt = composePrompt(feature, prompt, refs);
     if (!finalPrompt.trim()) {
       setError("Write an instruction first.");
       return;
@@ -916,8 +916,9 @@ function SettingsModal(props: {
   );
 }
 
-function composePrompt(feature: FeatureConfig, userPrompt: string) {
+function composePrompt(feature: FeatureConfig, userPrompt: string, references: ReferenceImage[] = []) {
   const text = userPrompt.trim();
+  const hasFaceReference = references.some((reference) => reference.role === "face");
   switch (feature.id) {
     case "copyStyle":
       return [
@@ -926,8 +927,9 @@ function composePrompt(feature: FeatureConfig, userPrompt: string) {
         "Use the outfit reference only for the clothing and footwear: garment shape, fabric, color, pattern, fit, socks, and shoes.",
         "Do not copy jewelry, watches, bags, hats, glasses, makeup, tattoos, or other non-clothing accessories from the outfit reference.",
         "Do not copy the face, body identity, pose, background, lighting, or camera style from the outfit reference.",
-        "Use the face reference only for identity if provided.",
-        "If no face reference is provided, preserve the face and identity from the style reference when it contains a person. Otherwise create a similar natural face that matches the style reference.",
+        hasFaceReference
+          ? "FACE CONTROL: A face reference is attached. The final image must use the facial appearance from the face reference: face shape, eyes, nose, mouth, eyebrows, skin tone, hairstyle, and overall facial proportions. Do not keep the original face from the style reference."
+          : "FACE CONTROL: No face reference is attached. Use the face/general facial look from the style reference when it contains a person. Otherwise create a similar natural fashion model face.",
         `MODEL DESCRIPTION: ${text || "A realistic fashion model with a natural pose and expression."}`,
         "OUTPUT: Photorealistic editorial fashion image.",
       ].join("\n");

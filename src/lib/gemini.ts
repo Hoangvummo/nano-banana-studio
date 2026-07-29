@@ -29,16 +29,41 @@ const safetySettings: GenerateContentConfig["safetySettings"] = [
 export async function listModels(apiKey: string): Promise<ListedModel[]> {
   if (!apiKey.trim()) throw new Error("Enter an API key first.");
 
-  return STUDIO_MODELS.map((model) => ({
-    name: `models/${model.id}`,
-    displayName: model.label,
-    description: model.description,
-    supportedGenerationMethods: ["generateContent", "streamGenerateContent"],
-  }));
+  const ai = createClient(apiKey);
+
+  try {
+    if (isVertexExpressKey(apiKey)) {
+      // Vertex AI Express keys support generation but not the model metadata
+      // endpoints, which require OAuth credentials.
+      return STUDIO_MODELS.map((model) => ({
+        name: `models/${model.id}`,
+        displayName: model.label,
+        description: model.description,
+        supportedGenerationMethods: ["generateContent", "streamGenerateContent"],
+      }));
+    }
+
+    const pager = await ai.models.list({ config: { pageSize: 100 } });
+    const models: ListedModel[] = [];
+
+    for await (const model of pager) {
+      if (!model.name) continue;
+      models.push({
+        name: model.name,
+        displayName: model.displayName,
+        description: model.description,
+        supportedGenerationMethods: model.supportedActions,
+      });
+    }
+
+    return models;
+  } catch (err) {
+    throw new Error(readGenerationError(err));
+  }
 }
 
 export async function generateImage(options: GenerationOptions): Promise<GeneratedImage[]> {
-  const ai = new GoogleGenAI({ apiKey: options.apiKey, vertexai: true });
+  const ai = createClient(options.apiKey);
   const results: GeneratedImage[] = [];
 
   for (let index = 0; index < options.count; index += 1) {
@@ -122,7 +147,7 @@ function buildParts(options: GenerationOptions): Part[] {
 
 function buildImageConfig(options: GenerationOptions): NonNullable<GenerateContentConfig["imageConfig"]> {
   return {
-    ...(options.aspectRatio === "auto" && options.model === "gemini-3-pro-image-preview"
+    ...(options.aspectRatio === "auto" && options.model === "gemini-3-pro-image"
       ? {}
       : { aspectRatio: options.aspectRatio }),
     imageSize: options.imageSize,
@@ -132,7 +157,7 @@ function buildImageConfig(options: GenerationOptions): NonNullable<GenerateConte
 }
 
 function buildThinkingConfig(options: GenerationOptions): Pick<GenerateContentConfig, "thinkingConfig"> {
-  if (options.model === "gemini-3-pro-image-preview") return {};
+  if (options.model === "gemini-3-pro-image") return {};
 
   return {
     thinkingConfig: {
@@ -150,4 +175,13 @@ function readGenerationError(err: unknown) {
   } catch {
     return message;
   }
+}
+
+function createClient(apiKey: string) {
+  const key = apiKey.trim();
+  return new GoogleGenAI(isVertexExpressKey(key) ? { apiKey: key, vertexai: true } : { apiKey: key });
+}
+
+function isVertexExpressKey(apiKey: string) {
+  return apiKey.trim().startsWith("AQ.");
 }

@@ -1,8 +1,7 @@
 export type ModelId =
   | "gemini-2.5-flash-image"
-  | "gemini-3.1-flash-image-preview"
-  | "gemini-3-pro-image-preview"
-  | "nano-banana-pro-preview";
+  | "gemini-3.1-flash-image"
+  | "gemini-3-pro-image";
 
 export type AspectRatio = "auto" | "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 export type ImageSize = "1K" | "2K" | "4K";
