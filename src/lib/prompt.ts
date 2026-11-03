@@ -1,33 +1,33 @@
 const subjects = [
-  "a confident fashion model walking through a quiet city street",
-  "a cozy product lifestyle scene on a clean studio table",
-  "a cinematic portrait with natural skin texture and realistic light",
-  "a premium e-commerce product photo on a seamless white backdrop",
-  "a candid daily-life snapshot captured on a modern smartphone",
+  "a confident fashion model walking through a quiet neon-lit Tokyo street at blue hour",
+  "a luxury product lifestyle scene on a sculpted dark slate podium with water ripples",
+  "a cinematic editorial portrait with natural skin texture and dramatic rim lighting",
+  "a high-fashion e-commerce lookbook photo on a seamless studio backdrop",
+  "a futuristic streetwear campaign shot with prism light reflections",
 ];
 
 const lighting = [
-  "soft daylight from a large side window",
-  "clean commercial studio lighting with realistic shadows",
-  "warm late-afternoon light with subtle film grain",
-  "high-end editorial lighting, crisp but natural",
-  "raw smartphone flash with honest imperfections",
+  "soft daylight from a large side window with gentle fill",
+  "clean commercial studio lighting with realistic floor shadows",
+  "electric blue and warm amber dual-tone cinematic key light",
+  "high-end editorial butterfly lighting, crisp fabric detail",
+  "natural golden hour rim light with subtle film grain",
 ];
 
 const cameras = [
-  "50mm full-frame camera, shallow depth of field",
-  "smartphone back camera, unfiltered, natural perspective",
-  "editorial magazine composition, balanced negative space",
-  "product photography lens, sharp fabric and surface detail",
+  "50mm full-frame prime lens, f/1.8 shallow depth of field",
+  "85mm editorial portrait lens, balanced negative space",
+  "medium-format studio camera, ultra-sharp fabric and skin micro-texture",
+  "35mm dynamic low-angle fashion perspective",
 ];
 
 export function randomPrompt() {
   return [
     `[Subject]: ${pick(subjects)}`,
-    "[Style]: photorealistic, believable, no plastic AI texture",
+    "[Style]: photorealistic, high-fashion editorial, natural textures",
     `[Lighting]: ${pick(lighting)}`,
     `[Camera]: ${pick(cameras)}`,
-    "[Output]: high detail, coherent hands and textures, production-ready image",
+    "[Output]: 4K studio quality, coherent hands and garment stitching, production-ready",
   ].join("\n");
 }
 

@@ -18,7 +18,7 @@ export function fileToReference(file: File, role: ReferenceImage["role"]): Promi
 }
 
 export function splitDataUrl(dataUrl: string) {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
   if (!match) {
     return { mimeType: "image/jpeg", data: dataUrl };
   }
