@@ -24,7 +24,8 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { discoverVertexProjectId, generateImage, getCachedVertexProjectId, isAbortError, listModels, saveVertexProjectId } from "./lib/gemini";
+import { discoverVertexProjectId, generateAiPrompts, generateImage, getCachedVertexProjectId, isAbortError, listModels, saveVertexProjectId } from "./lib/gemini";
+import { LANUPE_COMMON, LANUPE_DIRECTIONS, randomDetailedPrompts, type LanupeDirectionId } from "./lib/lanupeStyle";
 import {
   ASPECT_RATIOS,
   DEFAULT_MODEL,
@@ -184,6 +185,10 @@ function App() {
   const [count, setCount] = useState(1);
   const [concurrency, setConcurrency] = useState<number>(2);
   const [prompt, setPrompt] = useState("");
+  const [aiSuggestions, setAiSuggestions] = useState<string[] | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiDirection, setAiDirection] = useState<LanupeDirectionId | "auto">("auto");
 
   const [slotImages, setSlotImages] = useState<Partial<Record<SlotKey, ReferenceImage>>>({});
   const [studioBatchImages, setStudioBatchImages] = useState<ReferenceImage[]>([]);
@@ -292,6 +297,50 @@ function App() {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [feature, slotImages]);
+
+  // AI prompt suggestions in the lanupe_ style (5 approved directions;
+  // the product-only close-up direction is excluded). With a key, the
+  // model writes 3 detailed prompts; without a key, or when the model
+  // call fails, the offline detailed builder fills in instead — the
+  // button never ends up empty. The current prompt text, if any, is
+  // treated as the seed idea, not overwritten until the user picks one.
+  async function handleAiSuggestions() {
+    if (aiLoading) return;
+    setAiLoading(true);
+    setAiError("");
+    const refs =
+      activeFeature === "edit" || activeFeature === "create" ? editReferenceImages : slotRefs;
+    const hasFace = refs.some((ref) => ref.role === "face");
+    const seed = prompt.trim();
+    const offline = () => randomDetailedPrompts(aiDirection, seed, hasFace, 3);
+    try {
+      if (!apiKey.trim()) {
+        setAiSuggestions(offline());
+        setAiError("Chưa có API key nên dùng prompt chi tiết offline kiểu lanupe_.");
+      } else {
+        const styleProfile = JSON.stringify({ common: LANUPE_COMMON, directions: LANUPE_DIRECTIONS });
+        const ai = await generateAiPrompts({
+          apiKey: apiKey.trim(),
+          vertexProjectId: vertexProjectId.trim() || getCachedVertexProjectId(apiKey.trim()) || undefined,
+          model,
+          styleProfile,
+          seed,
+          featureLabel: feature.label,
+          hasFaceReference: hasFace,
+        });
+        const merged = [...ai];
+        if (merged.length < 3) merged.push(...offline().slice(0, 3 - merged.length));
+        setAiSuggestions(merged.slice(0, 3));
+      }
+    } catch (err) {
+      setAiSuggestions(offline());
+      setAiError(
+        `AI gợi ý lỗi (${err instanceof Error ? err.message : "không rõ nguyên nhân"}), đã dùng prompt chi tiết offline thay thế.`,
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   async function handleTestKey() {
     if (!apiKey.trim()) {
@@ -864,6 +913,33 @@ function App() {
                     <WandSparkles size={12} />
                     <span>Ngẫu nhiên</span>
                   </button>
+                  <button
+                    type="button"
+                    className="mini-icon-action"
+                    title="Tạo prompt chi tiết kiểu lanupe_ ngẫu nhiên, không cần API key"
+                    onClick={() => {
+                      const refs =
+                        activeFeature === "edit" || activeFeature === "create"
+                          ? editReferenceImages
+                          : slotRefs;
+                      setPrompt(
+                        randomDetailedPrompts("auto", "", refs.some((ref) => ref.role === "face"), 1)[0]!,
+                      );
+                    }}
+                  >
+                    <WandSparkles size={12} />
+                    <span>Chi tiết lanupe_</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-icon-action"
+                    title="AI viết 3 prompt chi tiết kiểu lanupe_, bấm vào một gợi ý để dùng"
+                    onClick={handleAiSuggestions}
+                    disabled={aiLoading}
+                  >
+                    <WandSparkles size={12} />
+                    <span>{aiLoading ? "Đang viết..." : "AI gợi ý"}</span>
+                  </button>
                   {activeFeature === "ecommerce" && (
                     <button
                       type="button"
@@ -890,6 +966,52 @@ function App() {
                   )}
                 </div>
               </div>
+              {aiSuggestions && (
+                <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      value={aiDirection}
+                      onChange={(e) => setAiDirection(e.target.value as LanupeDirectionId | "auto")}
+                      style={{ flex: 1, minWidth: 180 }}
+                    >
+                      <option value="auto">Hướng lanupe_: ngẫu nhiên 3 hướng khác nhau</option>
+                      {LANUPE_DIRECTIONS.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.label} ({d.share})
+                        </option>
+                      ))}
+                    </select>
+                    <button type="button" className="mini-icon-action" onClick={handleAiSuggestions} disabled={aiLoading}>
+                      <WandSparkles size={12} />
+                      <span>{aiLoading ? "Đang viết..." : "Tạo lại"}</span>
+                    </button>
+                    <button type="button" className="mini-icon-action" onClick={() => setAiSuggestions(null)}>
+                      <span>Đóng</span>
+                    </button>
+                  </div>
+                  {aiError && <p style={{ fontSize: 12, opacity: 0.8 }}>{aiError}</p>}
+                  {aiSuggestions.map((suggestion, idx) => (
+                    <div key={idx} style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: 8 }}>
+                      <p style={{ fontSize: 12, margin: "0 0 6px" }}>
+                        Gợi ý {idx + 1}: {suggestion.split("\n\n")[0]?.slice(0, 220)}...
+                      </p>
+                      <button
+                        type="button"
+                        className="mini-icon-action"
+                        onClick={() => {
+                          setPrompt(suggestion);
+                          setAiSuggestions(null);
+                        }}
+                      >
+                        <span>Dùng prompt này</span>
+                      </button>
+                    </div>
+                  ))}
+                  <p style={{ fontSize: 12, opacity: 0.7 }}>
+                    Mỗi gợi ý là một prompt đầy đủ chi tiết (mặt, da, trang điểm, NEGATIVE, trang phục, tư thế, bối cảnh, ánh sáng, tông màu, máy ảnh), không tính hướng ảnh sản phẩm cận cảnh đã bỏ.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Compact Output Summary Card */}

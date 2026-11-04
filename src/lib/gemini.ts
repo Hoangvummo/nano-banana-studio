@@ -1,4 +1,4 @@
-import type { GenerationOptions, GeneratedImage, ListedModel } from "../types";
+import type { GenerationOptions, GeneratedImage, ListedModel, ModelId } from "../types";
 import { splitDataUrl } from "./image";
 import { STUDIO_MODELS, is1KOnlyModel, selectedModelApiName } from "./models";
 import { buildReferenceInstruction } from "./prompt";
@@ -277,6 +277,121 @@ export async function listModels(apiKey: string): Promise<ListedModel[]> {
   } catch (err) {
     throw new Error(readGenerationError(err));
   }
+}
+
+export interface AiPromptRequest {
+  apiKey: string;
+  vertexProjectId?: string;
+  model: ModelId;
+  styleProfile: string;
+  seed?: string;
+  featureLabel?: string;
+  hasFaceReference?: boolean;
+  signal?: AbortSignal;
+}
+
+// Text-only prompt suggestions, reusing the same backend routing as
+// image generation (global project first when known, otherwise
+// Express, then global on the specific Vertex 404) and the same
+// exact model — no model fallback. Unlike image generation, retries
+// here are BOUNDED (one rate-limit retry per route): a suggestion
+// button must not hang indefinitely, and the caller falls back to
+// the offline detailed-prompt builder when this throws.
+export async function generateAiPrompts(request: AiPromptRequest): Promise<string[]> {
+  throwIfAborted(request.signal);
+  const apiKey = request.apiKey.trim();
+  if (!apiKey) throw new Error("Enter an API key first.");
+  const backend = resolveBackend(apiKey);
+  const apiName = selectedModelApiName(request.model);
+  const instruction = [
+    "You are a fashion photography prompt writer. Write image prompts in English, in the detailed section style of the style profile below.",
+    "Output EXACTLY 3 different prompts. Separate them with a line containing only: ---PROMPT---",
+    "Each prompt must be one complete detailed prompt with sections for: face, facial features, skin, lighting on the face, makeup, NEGATIVE, skin tone, outfit, posture, location, background, lighting, mood, color tone, style, camera, additions.",
+    "The 3 prompts must differ clearly in pose, camera angle, background and outfit — not three rewordings of the same shot.",
+    "Every prompt must demand a sharp background with no blur and no bokeh, deep depth of field, and everything in focus.",
+    request.hasFaceReference
+      ? "The user has attached a face reference: every prompt must say the face is exactly the same as the attached image, without alteration."
+      : "No face reference is attached: describe a natural model, rarely looking directly at the camera, rarely smiling broadly.",
+    request.seed?.trim() ? `User idea to keep in all prompts: ${request.seed.trim()}.` : "",
+    request.featureLabel ? `The prompt will be used for: ${request.featureLabel}.` : "",
+    "STYLE PROFILE (lanupe_, from 50 surveyed posts; the product-only close-up direction is excluded):",
+    request.styleProfile,
+    "Do not add any commentary, numbering or explanation outside the 3 prompts.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const routes: Array<string | null> = [];
+  const seen = new Set<string>();
+  const addRoute = (projectGlobal: string | null) => {
+    const key = projectGlobal ?? "express";
+    if (seen.has(key)) return;
+    seen.add(key);
+    routes.push(projectGlobal);
+  };
+  if (backend === "vertex-express") {
+    const known = request.vertexProjectId?.trim() || getCachedVertexProjectId(apiKey);
+    if (known) addRoute(known);
+    addRoute(null);
+  } else {
+    addRoute(null);
+  }
+
+  let lastError: unknown = null;
+  for (let i = 0; i < routes.length; i += 1) {
+    const route = routes[i] as string | null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      throwIfAborted(request.signal);
+      try {
+        const generationConfig: Record<string, unknown> = {
+          maxOutputTokens: 8192,
+          responseModalities: ["TEXT"],
+        };
+        if (request.model !== "gemini-nano-banana-2.1") {
+          generationConfig.temperature = 0.9;
+          generationConfig.topP = 0.95;
+        }
+        const res = await fetch(endpointFor(backend, apiName, false, route), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: instruction }] }],
+            generationConfig,
+            safetySettings,
+          }),
+          signal: request.signal,
+        });
+        if (!res.ok) throw new Error(await readApiError(res));
+        const data = (await res.json()) as ApiResponse;
+        const text = (data.candidates ?? [])
+          .flatMap((c) => (c.content?.parts ?? []).map((p) => p.text ?? ""))
+          .join("");
+        const prompts = text
+          .split("---PROMPT---")
+          .map((p) => p.trim())
+          .filter((p) => p.length > 200);
+        if (prompts.length > 0) return prompts.slice(0, 3);
+        throw new Error(`Model ${apiName} returned no prompt text.`);
+      } catch (err) {
+        if (isAbortError(err) || request.signal?.aborted) throw createAbortError();
+        lastError = err;
+        const message = readGenerationError(err);
+        if (backend === "vertex-express" && route === null) {
+          const parsed = parseVertexLocationError(message);
+          if (parsed && parsed.location !== "global") {
+            saveVertexProjectId(apiKey, parsed.project);
+            addRoute(parsed.project);
+          }
+        }
+        if (isRateLimitError(message) && attempt === 0) {
+          await abortableDelay(2000, request.signal);
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  throw new Error(readGenerationError(lastError));
 }
 
 export async function generateImage(options: GenerationOptions): Promise<GeneratedImage[]> {
