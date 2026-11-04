@@ -43,30 +43,6 @@ export const STUDIO_MODELS: StudioModel[] = [
   },
 ];
 
-export const MODEL_API_CANDIDATES: Record<ModelId, string[]> = {
-  "gemini-nano-banana-2.1": [
-    "gemini-nano-banana-2.1",
-    "gemini-nano-banana-2.1-preview",
-    "gemini-3.1-flash-image",
-  ],
-  "gemini-3.1-flash-image": [
-    "gemini-3.1-flash-image",
-    "gemini-3.1-flash-image-preview",
-  ],
-  "gemini-3.1-flash-lite-image": [
-    "gemini-3.1-flash-lite-image",
-    "gemini-3.1-flash-lite-image-preview",
-  ],
-  "gemini-3-pro-image": [
-    "gemini-3-pro-image",
-    "gemini-3-pro-image-preview",
-  ],
-  "gemini-2.5-flash-image": [
-    "gemini-2.5-flash-image",
-    "gemini-2.5-flash-image-preview",
-  ],
-};
-
 export const ASPECT_RATIOS: AspectRatio[] = ["auto", "1:1", "3:4", "4:3", "9:16", "16:9"];
 export const IMAGE_SIZES: ImageSize[] = ["1K", "2K", "4K"];
 
@@ -84,6 +60,9 @@ export function is1KOnlyModel(model: ModelId): boolean {
   return model === "gemini-2.5-flash-image" || model === "gemini-3.1-flash-lite-image";
 }
 
-export function getModelCandidates(model: ModelId): string[] {
-  return MODEL_API_CANDIDATES[model] ?? [model];
+// Intentionally no model fallback: a generation always uses the exact
+// model the user selected (its apiName), never a *-preview alias or
+// another model, even if that model returns 404 / not supported.
+export function selectedModelApiName(model: ModelId): string {
+  return STUDIO_MODELS.find((item) => item.id === model)?.apiName ?? model;
 }

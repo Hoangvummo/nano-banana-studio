@@ -2,12 +2,17 @@ import { GoogleGenAI, HarmBlockThreshold, HarmCategory, ThinkingLevel } from "@g
 import type { Content, GenerateContentConfig, Part } from "@google/genai";
 import type { GenerationOptions, GeneratedImage, ListedModel } from "../types";
 import { splitDataUrl } from "./image";
-import { STUDIO_MODELS, getModelCandidates, is1KOnlyModel } from "./models";
+import { STUDIO_MODELS, is1KOnlyModel, selectedModelApiName } from "./models";
 import { buildReferenceInstruction } from "./prompt";
 
 const IMAGE_MIME_TYPE = "image/png";
-const MAX_RETRIES = 3;
+// Retry delay for rate-limit / transient errors. There is intentionally
+// no max-attempt cap for those errors: the wait backs off exponentially
+// up to this ceiling and then keeps retrying until it succeeds or the
+// user cancels (the delay is abortable). Non-retryable errors below
+// still fail immediately.
 const BASE_RETRY_DELAY_MS = 1800;
+const MAX_RETRY_DELAY_MS = 60_000;
 
 const safetySettings: GenerateContentConfig["safetySettings"] = [
   {
@@ -89,60 +94,58 @@ async function generateSingleImageWithRetry(
   options: GenerationOptions,
   isVertex: boolean,
 ): Promise<GeneratedImage> {
-  const candidates = getModelCandidates(options.model);
-  let lastError: unknown = null;
+  // Exact model only: no fallback to a *-preview alias or another model.
+  // If this model is not found / not supported, that error is surfaced
+  // as-is instead of silently generating with a different model.
+  const targetModel = selectedModelApiName(options.model);
+  let attempt = 0;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  for (;;) {
     throwIfAborted(options.signal);
 
-    for (let candidateIdx = 0; candidateIdx < candidates.length; candidateIdx += 1) {
-      const candidateModel = candidates[candidateIdx];
-      throwIfAborted(options.signal);
+    let lastError: unknown = null;
+    try {
+      return await executeModelGeneration(ai, targetModel, options, isVertex, false);
+    } catch (err) {
+      if (isAbortError(err) || options.signal?.aborted) {
+        throw createAbortError();
+      }
+      lastError = err;
 
-      try {
-        return await executeModelGeneration(ai, candidateModel, options, isVertex, false);
-      } catch (err) {
-        if (isAbortError(err) || options.signal?.aborted) {
-          throw createAbortError();
-        }
-
-        lastError = err;
-        const rawMessage = readGenerationError(err);
-
-        if (isInvalidConfigError(rawMessage)) {
-          try {
-            return await executeModelGeneration(ai, candidateModel, options, isVertex, true);
-          } catch (fallbackErr) {
-            if (isAbortError(fallbackErr) || options.signal?.aborted) {
-              throw createAbortError();
-            }
-            lastError = fallbackErr;
+      // Same model, minimal config only (imageConfig / thinking fields
+      // rejected by this model). This is not a model redirect.
+      if (isInvalidConfigError(readGenerationError(err))) {
+        try {
+          return await executeModelGeneration(ai, targetModel, options, isVertex, true);
+        } catch (minimalErr) {
+          if (isAbortError(minimalErr) || options.signal?.aborted) {
+            throw createAbortError();
           }
+          lastError = minimalErr;
         }
-
-        if (candidateIdx < candidates.length - 1 && isModelNotFoundError(rawMessage)) {
-          options.onStatus?.(`Đang chuyển sang endpoint ${candidates[candidateIdx + 1]}...`);
-          continue;
-        }
-
-        break;
       }
     }
 
     const errMessage = readGenerationError(lastError);
-    if (attempt < MAX_RETRIES - 1 && isRetryableError(errMessage)) {
-      const waitMs = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+
+    // Rate limits, quota exhaustion and transient server/network
+    // errors: wait and retry the SAME model until it succeeds or the
+    // user cancels. There is no attempt cap here by design.
+    if (isRetryableError(errMessage)) {
+      const waitMs = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+      const waitSeconds = (waitMs / 1000).toFixed(1);
+      attempt += 1;
       options.onStatus?.(
-        `Chạm giới hạn tốc độ — tự thử lại (${attempt + 1}/${MAX_RETRIES - 1}) sau ${(waitMs / 1000).toFixed(1)}s...`,
+        isRateLimitError(errMessage)
+          ? `Chạm giới hạn tốc độ của model ${targetModel} — đang chờ và sẽ thử lại lần ${attempt} sau ${waitSeconds}s, vẫn giữ đúng model này (bấm Hủy để dừng)...`
+          : `Máy chủ đang bận — đang chờ và sẽ thử lại lần ${attempt} sau ${waitSeconds}s, vẫn giữ đúng model ${targetModel} (bấm Hủy để dừng)...`,
       );
       await abortableDelay(waitMs, options.signal);
       continue;
     }
 
-    break;
+    throw new Error(errMessage);
   }
-
-  throw new Error(readGenerationError(lastError));
 }
 
 async function executeModelGeneration(
@@ -159,7 +162,7 @@ async function executeModelGeneration(
     },
   ];
 
-  const isProModel = options.model === "gemini-3-pro-image" || targetModel.includes("pro-image");
+  const isProModel = options.model === "gemini-3-pro-image";
 
   const config: GenerateContentConfig = {
     maxOutputTokens: 32768,
@@ -343,16 +346,6 @@ function buildThinkingConfig(
   };
 }
 
-function isModelNotFoundError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("404") ||
-    lower.includes("not_found") ||
-    lower.includes("not found") ||
-    lower.includes("is not supported for generatecontent")
-  );
-}
-
 function isInvalidConfigError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
@@ -379,6 +372,17 @@ function isRetryableError(message: string): boolean {
     lower.includes("overloaded") ||
     lower.includes("network") ||
     lower.includes("failed to fetch")
+  );
+}
+
+function isRateLimitError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("429") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("quota") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests")
   );
 }
 

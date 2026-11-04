@@ -30,8 +30,8 @@ import {
   DEFAULT_MODEL,
   IMAGE_SIZES,
   STUDIO_MODELS,
-  getModelCandidates,
   is1KOnlyModel,
+  selectedModelApiName,
   modelLabel,
   modelShortLabel,
 } from "./lib/models";
@@ -1404,11 +1404,11 @@ function composePrompt(feature: FeatureConfig, userPrompt: string, references: R
 }
 
 function hasModelAccess(names: string[], modelId: ModelId) {
-  const candidates = getModelCandidates(modelId);
-  return candidates.some((candidate) =>
-    names.some(
-      (name) => name === candidate || name === `models/${candidate}` || name.endsWith(`/models/${candidate}`),
-    ),
+  // Exact model only: a *-preview alias listed by the API does not
+  // count as access to the model the user actually selected.
+  const apiName = selectedModelApiName(modelId);
+  return names.some(
+    (name) => name === apiName || name === `models/${apiName}` || name.endsWith(`/models/${apiName}`),
   );
 }
 
