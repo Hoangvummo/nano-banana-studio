@@ -183,7 +183,10 @@ function App() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("3:4");
   const [imageSize, setImageSize] = useState<ImageSize>("2K");
   const [count, setCount] = useState(1);
-  const [concurrency, setConcurrency] = useState<number>(2);
+  // Kept only so older UI references still compile; generation is
+  // always sequential now (see executeTasksWithQueue), so this value
+  // is no longer used to start parallel workers.
+  const [concurrency] = useState<number>(1);
   const [prompt, setPrompt] = useState("");
   const [aiSuggestions, setAiSuggestions] = useState<string[] | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -204,6 +207,20 @@ function App() {
 
   const taskControllersRef = useRef<Map<string, AbortController>>(new Map());
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
+  // Global generation queue, across jobs: a second Generate click
+  // does not start in parallel with a running job, it waits behind
+  // it. The chain never rejects, so one job's failure or cancel
+  // never blocks the next job in line.
+  const generationQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  async function runGenerationQueued(fn: () => Promise<void>) {
+    const run = generationQueueRef.current.then(fn);
+    generationQueueRef.current = run.then(
+      () => {},
+      () => {},
+    );
+    await run;
+  }
 
   const feature = useMemo(() => FEATURES.find((item) => item.id === activeFeature)!, [activeFeature]);
   const selectedModelInfo = useMemo(
@@ -485,7 +502,13 @@ function App() {
   }
 
   async function executeTasksWithQueue(jobId: string, tasksToRun: BatchTask[]) {
-    const maxWorkers = Math.max(1, Math.min(4, concurrency));
+    // Strictly sequential, by design: one task runs, the previous
+    // one must be fully done (success, definitive failure, or user
+    // cancel) before the next one starts. Parallel workers sharing
+    // one per-project quota were the main reason several images kept
+    // hitting rate limits together and none finished. The concurrency
+    // selector is therefore no longer used for generation.
+    const maxWorkers = 1;
     let cursor = 0;
 
     async function worker() {
@@ -615,7 +638,7 @@ function App() {
         featureId: activeFeature,
         label: img.name || `Studio #${idx + 1}`,
         status: "queued",
-        message: `Đang chờ luồng (${concurrency}⚡)...`,
+        message: `Đang chờ tới lượt...`,
         source: img,
         model,
         prompt: composedPrompt,
@@ -652,7 +675,7 @@ function App() {
     };
 
     setJobs((current) => [newJob, ...current]);
-    await executeTasksWithQueue(jobId, tasks);
+    await runGenerationQueued(() => executeTasksWithQueue(jobId, tasks));
   }
 
   async function retrySingleTask(task: BatchTask) {
@@ -663,7 +686,7 @@ function App() {
       message: "Đang thử lại...",
     };
     updateTaskInJob(task.jobId, task.id, resetTask);
-    await executeTasksWithQueue(task.jobId, [resetTask]);
+    await runGenerationQueued(() => executeTasksWithQueue(task.jobId, [resetTask]));
   }
 
   const visibleTasks = canvasFilter === "done" ? [] : liveTasks;
@@ -1028,7 +1051,7 @@ function App() {
                   <div className="compact-trigger-labels">
                     <span>Output</span>
                     <strong>
-                      {aspectRatio} | {imageSize} | {concurrency}⚡
+                      {aspectRatio} | {imageSize} | tuần tự
                     </strong>
                   </div>
                 </div>
@@ -1071,19 +1094,10 @@ function App() {
                   </div>
 
                   <div className="output-param-section">
-                    <span className="output-param-label">Số luồng chạy song song</span>
-                    <div className="output-pills-row">
-                      {[1, 2, 3, 4].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          className={`out-pill-btn ${concurrency === c ? "active" : ""}`}
-                          onClick={() => setConcurrency(c)}
-                        >
-                          {c}⚡
-                        </button>
-                      ))}
-                    </div>
+                    <span className="output-param-label">Thứ tự tạo ảnh</span>
+                    <p style={{ fontSize: 12, opacity: 0.8, margin: 0 }}>
+                      Tuần tự: ảnh trước xong mới tới ảnh sau, các job sau xếp hàng chờ job trước, để tránh chạm quota.
+                    </p>
                   </div>
                 </div>
               )}
@@ -1387,7 +1401,7 @@ function App() {
               <Loader2 size={15} className="spin" style={{ color: "#38bdf8" }} />
               <span>
                 Đang chạy {activeRunningOrQueued.filter((t) => t.status === "running").length}/
-                {activeRunningOrQueued.length} ảnh ({concurrency}⚡ luồng)
+                {activeRunningOrQueued.length} ảnh (tuần tự)
               </span>
               <button type="button" className="dock-stop-btn" onClick={cancelAllJobs}>
                 Hủy tất cả

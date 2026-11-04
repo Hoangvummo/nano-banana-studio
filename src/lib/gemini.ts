@@ -395,25 +395,53 @@ export async function generateAiPrompts(request: AiPromptRequest): Promise<strin
   throw new Error(readGenerationError(lastError));
 }
 
+// Global image-generation mutex, held for a WHOLE generateImage call
+// — including every retry and every backoff wait inside it. This is
+// what makes generation strictly sequential: image N+1 cannot start
+// its first API call until image N has either succeeded or failed
+// definitively (or the user cancelled it). Without this, two tasks
+// could interleave — one still retrying while another starts — and
+// burn the same per-project quota twice. The mutex is a promise
+// chain, so callers queue in call order and a failure in one caller
+// never blocks the next (the gate is always released in `finally`).
+let generationMutex: Promise<void> = Promise.resolve();
+
+async function withGenerationMutex<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = generationMutex;
+  generationMutex = previous.then(() => gate);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 export async function generateImage(options: GenerationOptions): Promise<GeneratedImage[]> {
-  throwIfAborted(options.signal);
-
-  const backend = resolveBackend(options.apiKey);
-  const results: GeneratedImage[] = [];
-  const totalCount = Math.max(1, options.count);
-
-  for (let index = 0; index < totalCount; index += 1) {
+  return withGenerationMutex(async () => {
     throwIfAborted(options.signal);
 
-    if (totalCount > 1) {
-      options.onStatus?.(`Đang tạo biến thể ${index + 1}/${totalCount}...`);
+    const backend = resolveBackend(options.apiKey);
+    const results: GeneratedImage[] = [];
+    const totalCount = Math.max(1, options.count);
+
+    for (let index = 0; index < totalCount; index += 1) {
+      throwIfAborted(options.signal);
+
+      if (totalCount > 1) {
+        options.onStatus?.(`Đang tạo biến thể ${index + 1}/${totalCount}...`);
+      }
+
+      const generated = await generateSingleImageWithRetry(backend, options);
+      results.push(generated);
     }
 
-    const generated = await generateSingleImageWithRetry(backend, options);
-    results.push(generated);
-  }
-
-  return results;
+    return results;
+  });
 }
 
 async function generateSingleImageWithRetry(
@@ -531,12 +559,23 @@ async function attemptRouteWithRateRetry(
     const errMessage = readGenerationError(lastError);
 
     if (isRetryableError(errMessage)) {
-      const waitMs = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+      // Honour the server's own wait instruction when it gives one:
+      // readApiError appends it as [retry-after: Xs], and some error
+      // bodies say "retry in Xs". Otherwise use the exponential
+      // backoff, with jitter so a retry never lands in lock-step
+      // with another client. The mutex above already serialises
+      // tasks in this page; jitter covers other tabs / clients.
+      const retryAfterMatch =
+        errMessage.match(/retry-after:\s*(\d+(?:\.\d+)?)/i) ??
+        errMessage.match(/retry in\s+(\d+(?:\.\d+)?)\s*s/i);
+      const serverWaitMs = retryAfterMatch ? Math.round(parseFloat(retryAfterMatch[1]) * 1000) : null;
+      const baseWaitMs = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+      const waitMs = serverWaitMs ?? Math.round(baseWaitMs * (0.85 + Math.random() * 0.3));
       const waitSeconds = (waitMs / 1000).toFixed(1);
       attempt += 1;
       options.onStatus?.(
         isRateLimitError(errMessage)
-          ? `Chạm giới hạn tốc độ của model ${apiName} — đang chờ và sẽ thử lại lần ${attempt} sau ${waitSeconds}s, vẫn giữ đúng model này (bấm Hủy để dừng)...`
+          ? `Chạm giới hạn tốc độ của model ${apiName} — đang chờ và sẽ thử lại lần ${attempt} sau ${waitSeconds}s${serverWaitMs ? " (theo lệnh chờ của server)" : ""}, vẫn giữ đúng model này, các ảnh sau đang xếp hàng chờ (bấm Hủy để dừng)...`
           : `Máy chủ đang bận — đang chờ và sẽ thử lại lần ${attempt} sau ${waitSeconds}s, vẫn giữ đúng model ${apiName} (bấm Hủy để dừng)...`,
       );
       await abortableDelay(waitMs, options.signal);
@@ -582,6 +621,10 @@ async function executeModelGeneration(
     throw new Error("Máy chủ không trả về luồng dữ liệu.");
   }
 
+  // The stream is fully drained before anything else happens: no
+  // fallback and no retry starts while this call is still producing.
+  // The fallback below is part of this same attempt, under the same
+  // global mutex — it is not a second, parallel attempt.
   await consumeStream(streamRes.body, options, state);
 
   let resolvedImageData = state.finalImageData || state.thoughtImageData;
@@ -761,6 +804,14 @@ async function consumeStream(
           for (const chunk of chunks) {
             throwIfAborted(options.signal);
             if (chunk && typeof chunk === "object" && "error" in chunk) {
+              // Do NOT throw away an image that already arrived in
+              // this same stream: a late error chunk must not turn a
+              // finished image into a retry, or the tokens spent on
+              // that image are wasted and the retry spends them again.
+              // The finally block cancels the reader on return.
+              if (state.finalImageData || state.thoughtImageData) {
+                return;
+              }
               const apiErr = chunk as ApiResponse;
               throw new Error(
                 `${apiErr.error?.code ?? ""} ${apiErr.error?.status ?? ""} ${apiErr.error?.message ?? "Stream error"}`.trim(),
@@ -803,13 +854,21 @@ async function consumeStream(
 
 async function readApiError(res: Response): Promise<string> {
   const text = await res.text();
+  // Keep the server's wait instruction: without it, a retry can only
+  // guess, and guessing too early is what burns quota in a loop.
+  // Header names are case-insensitive; fetch normalises them.
+  const retryAfterRaw = res.headers?.get("retry-after") ?? res.headers?.get("Retry-After");
+  // Only a numeric Retry-After (seconds) is usable here; an HTTP-date
+  // value is left out rather than mis-parsed as a number.
+  const retryAfter = retryAfterRaw && /^\d+(\.\d+)?$/.test(retryAfterRaw.trim()) ? retryAfterRaw.trim() : null;
+  const retryAfterSuffix = retryAfter ? ` [retry-after: ${retryAfter}s]` : "";
   try {
     const parsed = JSON.parse(text) as ApiResponse;
     const message = parsed.error?.message ?? text;
     const status = parsed.error?.status ? ` (${parsed.error.status})` : "";
-    return `HTTP ${res.status}${status}: ${message}`;
+    return `HTTP ${res.status}${status}: ${message}${retryAfterSuffix}`;
   } catch {
-    return `HTTP ${res.status}: ${text || res.statusText}`;
+    return `HTTP ${res.status}: ${text || res.statusText}${retryAfterSuffix}`;
   }
 }
 
