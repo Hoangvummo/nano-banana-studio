@@ -43,16 +43,26 @@ export interface LanupeDirection {
 //
 // This is a generic fictional fashion muse, NOT a copy of any real
 // person's likeness: it blends soft East Asian beauty with European
-// bone structure (the mix the user asked for), in the cool, detached
-// attitude seen in the lanupe_ reference photos the user sent
-// (Paris balcony, cafe terrace, hotel lobby: long light-brown hair,
-// fair skin, slim elegant figure, looking away, never cute-smiling).
+// bone structure (the mix the user asked for), with a cool, detached
+// editorial attitude. Its source is the USER'S OWN description
+// ("young, beautiful, cool, Asian-European mix") plus the lanupe_
+// survey's hair note (long straight or softly waved, blonde or black)
+// — NOT the 3 images the user sent on 2026-11-05 01:38.
+//
+// CORRECTION (2026-11-05): those 3 images (Paris balcony in a beige
+// coat, cafe terrace in a camel knit + pleated skirt, hotel lobby in
+// black off-shoulder) are the UGLY GENERATED output, not lanupe_
+// photos. Their outfits and settings are lanupe_-style, which is
+// what caused the misreading — but their face is exactly what to
+// avoid: the same plain, mature-looking face in all 3, long plain
+// face, thin lips, dull blank stare, flat lifeless light-brown hair,
+// no youthful glow. Do NOT describe the muse from those images.
 // When a face reference IS attached, this muse is never used — the
 // reference face wins, exactly as attached.
 export const LANUPE_MUSE = {
   age: "a young adult woman, 24 to 28 years old, visibly youthful and fresh, never middle-aged or older-looking",
-  face: "Eurasian fashion muse blending soft East Asian beauty with European bone structure: oval face, softly high cheekbones, a refined straight nose with a slightly high bridge, a defined but soft jawline, full but natural lips, large almond-shaped eyes with soft double eyelids, long dark lashes, straight groomed dark brows",
-  hair: "long, thick, softly waved light-brown to dark-brown hair, centre or side part, healthy shine, moving naturally in a light breeze",
+  face: "Eurasian fashion muse blending soft East Asian beauty with European bone structure: oval face, softly high cheekbones, a refined straight nose with a slightly high bridge, a defined but soft jawline, full but natural lips, large bright almond-shaped eyes with soft double eyelids, long dark lashes, straight groomed dark brows, fresh luminous youthful glow",
+  hair: "long, thick, straight or softly waved hair, black or soft blonde to dark brown, centre or side part, healthy shine and volume, moving naturally in a light breeze, never flat or lifeless",
   figure: "Tall, slim, elegant figure with long legs and a natural, healthy silhouette — a high-fashion model body, not a generic average body",
   attitude:
     "cool, detached, quietly confident editorial attitude: calm gaze, relaxed shoulders, chin level or slightly raised, striking but never cute, never sweetly smiling, never blank or tired",
@@ -74,6 +84,7 @@ export const LANUPE_COMMON = {
   negatives: [
     "no older-looking, middle-aged or mature-aged model, no tired or aged face, no heavy wrinkles or sagging skin",
     "no generic average face, no plain or dull-looking model",
+    "no long plain face, no thin lips with a dull blank stare, no flat lifeless hair — the exact face in the ugly generated images to avoid",
     "no heavy bokeh that erases the background",
     "no flat phone-snapshot look",
     "no clinical over-sharpening",
