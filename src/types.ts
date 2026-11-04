@@ -1,7 +1,9 @@
 export type ModelId =
-  | "gemini-2.5-flash-image"
+  | "gemini-nano-banana-2.1"
   | "gemini-3.1-flash-image"
-  | "gemini-3-pro-image";
+  | "gemini-3.1-flash-lite-image"
+  | "gemini-3-pro-image"
+  | "gemini-2.5-flash-image";
 
 export type AspectRatio = "auto" | "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 export type ImageSize = "1K" | "2K" | "4K";
@@ -9,6 +11,8 @@ export type ImageSize = "1K" | "2K" | "4K";
 export interface StudioModel {
   id: ModelId;
   label: string;
+  shortLabel: string;
+  apiName: string;
   description: string;
   badge?: string;
 }

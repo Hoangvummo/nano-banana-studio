@@ -2,7 +2,7 @@ import { GoogleGenAI, HarmBlockThreshold, HarmCategory, ThinkingLevel } from "@g
 import type { Content, GenerateContentConfig, Part } from "@google/genai";
 import type { GenerationOptions, GeneratedImage, ListedModel } from "../types";
 import { splitDataUrl } from "./image";
-import { STUDIO_MODELS, getModelCandidates } from "./models";
+import { STUDIO_MODELS, getModelCandidates, is1KOnlyModel } from "./models";
 import { buildReferenceInstruction } from "./prompt";
 
 const IMAGE_MIME_TYPE = "image/png";
@@ -74,7 +74,7 @@ export async function generateImage(options: GenerationOptions): Promise<Generat
     throwIfAborted(options.signal);
 
     if (totalCount > 1) {
-      options.onStatus?.(`Generating variation ${index + 1}/${totalCount}...`);
+      options.onStatus?.(`Đang tạo biến thể ${index + 1}/${totalCount}...`);
     }
 
     const generated = await generateSingleImageWithRetry(ai, options, isVertex);
@@ -109,8 +109,6 @@ async function generateSingleImageWithRetry(
         lastError = err;
         const rawMessage = readGenerationError(err);
 
-        // If imageConfig field (like outputMimeType, personGeneration, or imageSize) was rejected,
-        // immediately retry with a minimal compatible imageConfig.
         if (isInvalidConfigError(rawMessage)) {
           try {
             return await executeModelGeneration(ai, candidateModel, options, isVertex, true);
@@ -122,13 +120,11 @@ async function generateSingleImageWithRetry(
           }
         }
 
-        // Try next model alias (e.g. gemini-3-pro-image -> gemini-3-pro-image-preview) if model not found/supported
         if (candidateIdx < candidates.length - 1 && isModelNotFoundError(rawMessage)) {
-          options.onStatus?.(`Switching to endpoint ${candidates[candidateIdx + 1]}...`);
+          options.onStatus?.(`Đang chuyển sang endpoint ${candidates[candidateIdx + 1]}...`);
           continue;
         }
 
-        // Break inner candidate loop if it's a rate limit or transient error so outer loop backs off
         break;
       }
     }
@@ -137,7 +133,7 @@ async function generateSingleImageWithRetry(
     if (attempt < MAX_RETRIES - 1 && isRetryableError(errMessage)) {
       const waitMs = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
       options.onStatus?.(
-        `Rate limit / busy — retrying (${attempt + 1}/${MAX_RETRIES - 1}) in ${(waitMs / 1000).toFixed(1)}s...`,
+        `Chạm giới hạn tốc độ — tự thử lại (${attempt + 1}/${MAX_RETRIES - 1}) sau ${(waitMs / 1000).toFixed(1)}s...`,
       );
       await abortableDelay(waitMs, options.signal);
       continue;
@@ -173,7 +169,7 @@ async function executeModelGeneration(
     ...buildThinkingConfig(options, isProModel, minimalConfig),
     imageConfig: buildImageConfig(options, isVertex && !minimalConfig, minimalConfig),
     safetySettings,
-    ...(options.signal ? { abortSignal: options.signal } : {}),
+    ...(options.signal ? ({ abortSignal: options.signal } as Partial<GenerateContentConfig>) : {}),
   };
 
   let responseText = "";
@@ -184,8 +180,6 @@ async function executeModelGeneration(
   let thoughtMimeType = IMAGE_MIME_TYPE;
   let finishReason = "";
 
-  // For Nano Banana Pro, we support streaming with proper thought-part separation
-  // and automatic non-streaming fallback if stream yields no final image.
   const stream = await ai.models.generateContentStream({
     model: targetModel,
     contents,
@@ -210,7 +204,7 @@ async function executeModelGeneration(
         if (isThought) {
           thoughtText += part.text;
           if (isProModel) {
-            options.onStatus?.("Nano Banana Pro is reasoning composition...");
+            options.onStatus?.("Nano Banana Pro đang suy luận bố cục...");
           }
         } else {
           responseText += part.text;
@@ -219,14 +213,10 @@ async function executeModelGeneration(
 
       if (part.inlineData?.data) {
         foundInlineInChunk = true;
-        // CRITICAL FIX: Each inlineData.data in Gemini image responses is a complete
-        // base64 image payload (or an interim thought image when part.thought === true).
-        // Never concatenate (+=) separate image parts or interim thought images will
-        // corrupt the final base64 PNG/JPEG payload.
         if (isThought) {
           thoughtImageData = part.inlineData.data;
           thoughtMimeType = part.inlineData.mimeType || thoughtMimeType;
-          options.onStatus?.("Refining interim thought draft...");
+          options.onStatus?.("Đang tinh chỉnh bản nháp suy luận...");
         } else {
           finalImageData = part.inlineData.data;
           finalMimeType = part.inlineData.mimeType || finalMimeType;
@@ -234,7 +224,6 @@ async function executeModelGeneration(
       }
     }
 
-    // Safe fallback inside loop if SDK attaches raw base64 to chunk.data
     const rawChunkData = (chunk as { data?: string }).data;
     if (!foundInlineInChunk && !finalImageData && typeof rawChunkData === "string" && rawChunkData.length > 64) {
       finalImageData = rawChunkData;
@@ -244,9 +233,8 @@ async function executeModelGeneration(
   let resolvedImageData = finalImageData || thoughtImageData;
   let resolvedMimeType = finalImageData ? finalMimeType : thoughtMimeType;
 
-  // Fallback to non-streaming generateContent for Nano Banana Pro if streaming closed early without image bytes
   if (!resolvedImageData && finishReason !== "SAFETY" && !options.signal?.aborted) {
-    options.onStatus?.("Fetching full image payload...");
+    options.onStatus?.("Đang tải dữ liệu ảnh hoàn chỉnh...");
     const singleResponse = await ai.models.generateContent({
       model: targetModel,
       contents,
@@ -278,13 +266,13 @@ async function executeModelGeneration(
   }
 
   if (finishReason === "SAFETY" || finishReason === "IMAGE_SAFETY") {
-    throw new Error("The image was blocked by the safety filter. Try adjusting your prompt or reference images.");
+    throw new Error("Ảnh bị bộ lọc an toàn chặn. Hãy thử điều chỉnh lại câu lệnh hoặc ảnh tham chiếu.");
   }
 
   if (!resolvedImageData) {
     const cleanMessage = responseText.trim() || thoughtText.trim();
     throw new Error(
-      cleanMessage || `Model ${targetModel} did not return image bytes (finishReason: ${finishReason || "UNKNOWN"}).`,
+      cleanMessage || `Model ${targetModel} không trả về dữ liệu ảnh (finishReason: ${finishReason || "UNKNOWN"}).`,
     );
   }
 
@@ -321,13 +309,11 @@ function buildImageConfig(
 ): NonNullable<GenerateContentConfig["imageConfig"]> {
   const config: NonNullable<GenerateContentConfig["imageConfig"]> = {};
 
-  // "auto" is a UI option; never send "auto" to the Gemini API on any model
   if (options.aspectRatio && options.aspectRatio !== "auto") {
     config.aspectRatio = options.aspectRatio;
   }
 
-  // gemini-2.5-flash-image only supports aspectRatio, whereas Gemini 3 models support imageSize (1K/2K/4K)
-  if (!minimalConfig && options.model !== "gemini-2.5-flash-image" && options.imageSize) {
+  if (!minimalConfig && !is1KOnlyModel(options.model) && options.imageSize) {
     config.imageSize = options.imageSize;
   }
 
@@ -346,8 +332,6 @@ function buildThinkingConfig(
 ): Pick<GenerateContentConfig, "thinkingConfig"> {
   if (minimalConfig) return {};
 
-  // Nano Banana Pro (gemini-3-pro-image) has mandatory Thinking enabled by default
-  // and does not accept ThinkingLevel.MINIMAL.
   if (isProModel || options.model === "gemini-2.5-flash-image") {
     return {};
   }

@@ -31,7 +31,9 @@ import {
   IMAGE_SIZES,
   STUDIO_MODELS,
   getModelCandidates,
+  is1KOnlyModel,
   modelLabel,
+  modelShortLabel,
 } from "./lib/models";
 import { downloadDataUrl, fileToReference } from "./lib/image";
 import { randomPrompt } from "./lib/prompt";
@@ -198,6 +200,10 @@ function App() {
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
 
   const feature = useMemo(() => FEATURES.find((item) => item.id === activeFeature)!, [activeFeature]);
+  const selectedModelInfo = useMemo(
+    () => STUDIO_MODELS.find((item) => item.id === model) ?? STUDIO_MODELS[0],
+    [model],
+  );
   const slotRefs = useMemo(
     () => feature.slots.map((slot) => slotImages[slot.key]).filter((item): item is ReferenceImage => Boolean(item)),
     [feature, slotImages],
@@ -230,6 +236,12 @@ function App() {
       // Ignore storage errors
     }
   }, []);
+
+  useEffect(() => {
+    if (is1KOnlyModel(model) && imageSize !== "1K") {
+      setImageSize("1K");
+    }
+  }, [model, imageSize]);
 
   useEffect(() => {
     if (!successToast) return;
@@ -417,7 +429,7 @@ function App() {
           message:
             task.model === "gemini-3-pro-image"
               ? "Nano Banana Pro đang suy luận bố cục..."
-              : `Đang tạo bằng ${modelLabel(task.model)}...`,
+              : `Đang tạo bằng ${modelShortLabel(task.model)}...`,
         });
 
         try {
@@ -582,7 +594,7 @@ function App() {
         <div className="topbar-api-area">
           <div className="api-status-pill">
             <span className={`api-dot ${apiKey ? "ready" : ""}`} />
-            <span>{apiKey ? `${modelLabel(model)} Ready` : "Chưa kết nối API"}</span>
+            <span>{apiKey ? `${modelShortLabel(model)} Ready` : "Chưa kết nối API"}</span>
           </div>
 
           <button type="button" className="api-connect-btn" onClick={() => setSettingsOpen(true)}>
@@ -617,13 +629,13 @@ function App() {
         {/* COLUMN 2: LEFT INSPECTOR PANEL (Static Title/Guide + Model + Upload/Prompt + Output + Generate) */}
         <aside className="openart-inspector">
           <div className="inspector-scroll">
-            {/* Static Title & Usage Guide (Not a clickable button) */}
+            {/* Static Title & Usage Guide */}
             <div className="feature-intro-header">
               <h2>{feature.label}</h2>
               <p>{feature.guide}</p>
             </div>
 
-            {/* Compact Model Selector Card */}
+            {/* Compact Model Selector Card (Single-line full names + scrollable list) */}
             <div className="compact-select-card">
               <button
                 type="button"
@@ -634,28 +646,26 @@ function App() {
                   <div className="google-g-badge">G</div>
                   <div className="compact-trigger-labels">
                     <span>Model</span>
-                    <strong>{modelLabel(model)}</strong>
+                    <strong>{selectedModelInfo.label}</strong>
                   </div>
                 </div>
                 <ChevronRight size={16} className={`chevron-icon ${modelDrawerOpen ? "rotated" : ""}`} />
               </button>
 
               {modelDrawerOpen && (
-                <div className="compact-drawer-body">
+                <div className="compact-drawer-body model-scroll-list">
                   {STUDIO_MODELS.map((m) => (
                     <button
                       key={m.id}
                       type="button"
-                      className={`drawer-model-option ${model === m.id ? "selected" : ""}`}
+                      className={`drawer-model-option compact-single-line ${model === m.id ? "selected" : ""}`}
                       onClick={() => {
                         setModel(m.id);
                         setModelDrawerOpen(false);
                       }}
                     >
-                      <div>
-                        <strong>{m.label}</strong>
-                        <small>{m.description}</small>
-                      </div>
+                      <strong>{m.label}</strong>
+                      {m.badge && <span className="drawer-model-badge">{m.badge}</span>}
                     </button>
                   ))}
                 </div>
@@ -804,7 +814,7 @@ function App() {
                 placeholder={feature.placeholder}
               />
 
-              {/* Simple Utility Actions (No Auto Polish) */}
+              {/* Simple Utility Actions */}
               <div className="prompt-inner-toolbar">
                 <div className="prompt-tool-icons">
                   <button
@@ -892,7 +902,7 @@ function App() {
                           type="button"
                           className={`out-pill-btn ${imageSize === size ? "active" : ""}`}
                           onClick={() => setImageSize(size)}
-                          disabled={model === "gemini-2.5-flash-image" && size !== "1K"}
+                          disabled={is1KOnlyModel(model) && size !== "1K"}
                         >
                           {size}
                         </button>
@@ -1090,7 +1100,7 @@ function App() {
                           </div>
 
                           <div className="gen-bottom-meta">
-                            <span>{modelLabel(task.model)}</span>
+                            <span>{modelShortLabel(task.model)}</span>
                             <span>
                               {task.aspectRatio} · {task.imageSize}
                             </span>
@@ -1134,7 +1144,7 @@ function App() {
                       </div>
 
                       <div className="gen-bottom-meta">
-                        <span>{modelLabel(task.model)}</span>
+                        <span>{modelShortLabel(task.model)}</span>
                         <span>{task.imageSize}</span>
                       </div>
                     </article>
@@ -1156,7 +1166,7 @@ function App() {
 
                         <div className="card-hover-overlay">
                           <div className="overlay-top-actions">
-                            <span className="overlay-model-pill">{modelLabel(img.model)}</span>
+                            <span className="overlay-model-pill">{modelShortLabel(img.model)}</span>
 
                             <div className="overlay-icon-btns">
                               <button
@@ -1299,7 +1309,7 @@ function App() {
               <div className="lightbox-prompt">{cleanDisplayPrompt(selectedImage.prompt)}</div>
 
               <div className="lightbox-meta-chips">
-                <span>Model: {modelLabel(selectedImage.model)}</span>
+                <span>Model: {modelShortLabel(selectedImage.model)}</span>
                 <span>Tỷ lệ: {selectedImage.aspectRatio ?? "3:4"}</span>
                 <span>Chất lượng: {selectedImage.imageSize ?? "2K"}</span>
               </div>
