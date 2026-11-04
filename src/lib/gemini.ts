@@ -13,6 +13,16 @@ const IMAGE_MIME_TYPE = "image/png";
 // still fail immediately.
 const BASE_RETRY_DELAY_MS = 1800;
 const MAX_RETRY_DELAY_MS = 60_000;
+// Vertex location for all studio models. Nano Banana 2.1 (and the other
+// Gemini image models) are served from the global endpoint, not from
+// us-central1, so a us-central1 resource path 404s for them.
+// NOTE: the JS SDK clears / ignores `location` for browser clients that
+// authenticate with an Express API key, so setting this alone does not
+// change the request URL. The real global routing is done in
+// generateSingleImageWithRetry: when the server answers with a
+// projects/<id>/locations/us-central1/... NOT_FOUND, the same model is
+// retried once as projects/<id>/locations/global/publishers/google/models/<model>.
+const VERTEX_LOCATION = "global";
 
 const safetySettings: GenerateContentConfig["safetySettings"] = [
   {
@@ -97,7 +107,10 @@ async function generateSingleImageWithRetry(
   // Exact model only: no fallback to a *-preview alias or another model.
   // If this model is not found / not supported, that error is surfaced
   // as-is instead of silently generating with a different model.
-  const targetModel = selectedModelApiName(options.model);
+  // The one exception is a location redirect, not a model redirect:
+  // see the global retry below.
+  let targetModel = selectedModelApiName(options.model);
+  let triedGlobalLocation = false;
   let attempt = 0;
 
   for (;;) {
@@ -127,6 +140,24 @@ async function generateSingleImageWithRetry(
     }
 
     const errMessage = readGenerationError(lastError);
+
+    // Vertex location redirect (same model, different location only):
+    // the server resolves an Express key to projects/<id>/locations/us-central1
+    // by default, but Nano Banana 2.1 is global-only, so that path 404s.
+    // The project id is taken from the 404 message itself — never
+    // hard-coded — and the same model is retried once at locations/global.
+    // If the global attempt also 404s, the error below is surfaced as-is.
+    if (isVertex && !triedGlobalLocation) {
+      const vertexLocation = parseVertexLocationError(errMessage);
+      if (vertexLocation && vertexLocation.location !== VERTEX_LOCATION) {
+        triedGlobalLocation = true;
+        targetModel = `projects/${vertexLocation.project}/locations/${VERTEX_LOCATION}/publishers/google/models/${selectedModelApiName(options.model)}`;
+        options.onStatus?.(
+          `Model này không có ở ${vertexLocation.location}, đang thử lại cùng model ở locations/global...`,
+        );
+        continue;
+      }
+    }
 
     // Rate limits, quota exhaustion and transient server/network
     // errors: wait and retry the SAME model until it succeeds or the
@@ -386,6 +417,23 @@ function isRateLimitError(message: string): boolean {
   );
 }
 
+// Parse a Vertex NOT_FOUND like:
+// Publisher model `projects/<project-id>/locations/us-central1/publishers/google/models/gemini-nano-banana-2.1`
+// was not found ... Returns null when the message is not that shape.
+function parseVertexLocationError(
+  message: string,
+): { project: string; location: string } | null {
+  const lower = message.toLowerCase();
+  if (!lower.includes("404") && !lower.includes("not_found") && !lower.includes("not found")) {
+    return null;
+  }
+  const match = message.match(
+    /projects\/([A-Za-z0-9_-]+)\/locations\/([A-Za-z0-9_-]+)\/publishers\/google\/models\//,
+  );
+  if (!match) return null;
+  return { project: match[1], location: match[2] };
+}
+
 export function isAbortError(err: unknown): boolean {
   if (!err) return false;
   if (err instanceof DOMException && err.name === "AbortError") return true;
@@ -440,7 +488,16 @@ function readGenerationError(err: unknown): string {
 
 function createClient(apiKey: string) {
   const key = apiKey.trim();
-  return new GoogleGenAI(isVertexExpressKey(key) ? { apiKey: key, vertexai: true } : { apiKey: key });
+  // Only Vertex (AQ.) clients get a location. Regular Gemini API keys
+  // (AIza...) have no location concept and must be left untouched.
+  // See VERTEX_LOCATION: the SDK ignores this for browser Express
+  // clients, so the global retry in generateSingleImageWithRetry is
+  // what actually moves the request off us-central1.
+  return new GoogleGenAI(
+    isVertexExpressKey(key)
+      ? { apiKey: key, vertexai: true, location: VERTEX_LOCATION }
+      : { apiKey: key },
+  );
 }
 
 function isVertexExpressKey(apiKey: string) {
