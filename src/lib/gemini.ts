@@ -308,7 +308,8 @@ export async function generateAiPrompts(request: AiPromptRequest): Promise<strin
     "Output EXACTLY 3 different prompts. Separate them with a line containing only: ---PROMPT---",
     "Each prompt must be one complete detailed prompt with sections for: face, facial features, skin, lighting on the face, makeup, NEGATIVE, skin tone, outfit, posture, location, background, lighting, mood, color tone, style, camera, additions.",
     "The 3 prompts must differ clearly in pose, camera angle, background and outfit — not three rewordings of the same shot.",
-    "Every prompt must demand a sharp background with no blur and no bokeh, deep depth of field, and everything in focus.",
+    "Every prompt must use editorial camera language: 85mm portrait lens, f/2.8, subject tack sharp, background clearly readable with gentle natural depth — not heavy bokeh, and not flat clinical sharpness everywhere. Skin must have visible real texture and subtle film grain, never plastic or over-smoothed.",
+    "Keep only the SECTION structure from any example prompt (face, features, skin, face lighting, makeup, NEGATIVE, skin tone, outfit, posture, location, background, lighting, mood, colour, style, camera, additions). Do NOT copy any example's subject, setting, makeup, camera or wording: no sports theme, no arena, no f/22, no mobile-phone sensor, no porcelain or jelly skin.",
     request.hasFaceReference
       ? "The user has attached a face reference: every prompt must say the face is exactly the same as the attached image, without alteration."
       : "No face reference is attached: describe a natural model, rarely looking directly at the camera, rarely smiling broadly.",

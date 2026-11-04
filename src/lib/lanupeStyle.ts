@@ -45,10 +45,9 @@ export const LANUPE_COMMON = {
     "warm, muted, slightly soft film-like grade, medium contrast, low saturation, soft natural skin, never neon and never harsh flash",
   multiFrame: "the same outfit is often shown from several angles, as a set",
   negatives: [
-    "no background blur",
-    "no bokeh effect",
-    "no shallow depth of field",
-    "no depth blur",
+    "no heavy bokeh that erases the background",
+    "no flat phone-snapshot look",
+    "no clinical over-sharpening",
     "no distorted hands or fingers",
     "no extra limbs",
     "no warped garment shape, pattern or logo",
@@ -354,9 +353,14 @@ export interface DetailedPromptInput {
   hasOutfitReference?: boolean;
 }
 
-// One detailed prompt, in the same section order as the user's
-// reference example: face, skin, makeup, NEGATIVE, outfit, posture,
-// location, background, lighting, mood, colour, style, camera.
+// One detailed prompt. Only the SECTION ORDER is taken from the
+// user's reference example (face, features, skin, face lighting,
+// makeup, NEGATIVE, skin tone, outfit, posture, location, background,
+// lighting, mood, colour, style, camera, additions). Every word of
+// content below is lanupe_-specific and editorially optimised —
+// nothing from that example's subject, setting, makeup or camera
+// wording is copied: no sports theme, no arena light, no strawberry
+// lipstick, no f/22, no mobile-phone sensor, no porcelain/jelly skin.
 export function buildDetailedPrompt(input: DetailedPromptInput): string {
   const direction =
     input.directionId && input.directionId !== "auto"
@@ -373,22 +377,22 @@ export function buildDetailedPrompt(input: DetailedPromptInput): string {
   const sections = [
     `${faceLine} The style should be a lanupe_-style fashion portrait: ${direction.notes}`,
     seed ? `User idea to keep: ${seed}.` : "",
-    "• Facial features: Natural, balanced facial features, large expressive eyes, long naturally curled eyelashes, soft eyebrows, natural lips.",
-    "• Skin / Face: Smooth, radiant natural skin with visible real texture, soft film-like finish, lightly applied blush on the cheeks for a fresh, healthy look. Skin must look real, not plastic and not over-smoothed.",
-    "• Lighting on the face: Soft, direct, flattering light on the face, matching the scene lighting, with gentle shadows that keep the facial features readable.",
-    "• Makeup: Natural everyday makeup: translucent blush on the cheeks and under the eyes for a healthy rosy complexion, glossy natural lip colour, natural eyebrows. The face should look smooth and fresh, not matte and not heavy.",
+    "• Facial features: Natural, balanced facial features, calm expression, groomed natural brows, natural lashes, no exaggerated eyes or lips.",
+    "• Skin / Face: Natural skin with visible real texture and pores, subtle film grain, soft warm finish. Skin must look real and photographed, not plastic, not airbrushed and not over-smoothed.",
+    "• Lighting on the face: Soft directional light on the face, matched to the scene lighting, with gentle shadow modelling that keeps the facial features readable without harsh contrast.",
+    "• Makeup: Minimal natural makeup in neutral tones: a light touch of blush, a soft neutral lip colour, groomed natural brows. Fresh and understated, never heavy or theatrical.",
     `❌ NEGATIVE: ${LANUPE_COMMON.negatives.join(", ")}.`,
-    "• Skin tone: Natural fair skin, bright and radiant, with real skin texture, neither grey nor orange.",
+    "• Skin tone: Natural skin tone, warm and realistic, with real texture, neither grey nor orange.",
     `• Outfit: ${outfit}. Every garment detail must stay exact: shape, fabric, colour, pattern, fit and stitching. ${input.hasOutfitReference ? "Use the clothing and footwear only from the attached outfit reference." : ""}`,
     `• Posture: ${pose}. Natural, feminine and authentic posture, coherent hands and feet, no stiff catalogue posing.`,
     `• Location: ${background}.`,
-    "• Background: EXTREMELY SHARP AND DETAILED, crystal-clear environment, no background blur, no bokeh effect, no shallow depth of field, deep depth of field, everything is in focus, subject and background are sharp, high-resolution documentary photography, landscape clarity.",
+    "• Background: Clearly readable setting in natural depth: the subject is tack sharp, the setting is recognisable in every detail, with gentle natural depth rather than heavy blur or flat clinical sharpness everywhere. Editorial film photography, not a phone snapshot.",
     `• Lighting: ${direction.lighting}.`,
     `• Mood: ${direction.mood}.`,
     `• Color Tone: ${direction.colorTone}. Palette: ${direction.palette}.`,
-    `• Style: High-resolution documentary fashion photography, ${LANUPE_COMMON.grade}, raw photo feel, natural lifestyle, ${LANUPE_COMMON.multiFrame}. Framing: ${LANUPE_COMMON.framing}. Expression: ${LANUPE_COMMON.expression}.`,
-    `• Camera: ${angle}, standard camera mode, deep focus, everything sharp, strictly long focus distance, vertical framing.`,
-    "• Additions: NO background blur, NO bokeh effect, NO lens blur, NO depth blur, everything is sharp, subject and background both in focus.",
+    `• Style: High-resolution editorial fashion photography, ${LANUPE_COMMON.grade}, subtle Kodak Portra 400 film grain, natural lifestyle, ${LANUPE_COMMON.multiFrame}. Framing: ${LANUPE_COMMON.framing}. Expression: ${LANUPE_COMMON.expression}.`,
+    `• Camera: ${angle}, 85mm portrait lens, f/2.8, subject sharp, vertical framing.`,
+    "• Additions: Background stays readable, depth is gentle and natural, subject and setting both clear, no heavy blur, no flat over-sharpened phone look.",
   ];
   return sections.filter(Boolean).join("\n\n");
 }
