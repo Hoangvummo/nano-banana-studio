@@ -166,6 +166,39 @@ export function saveVertexProjectId(apiKey: string, projectId: string) {
   }
 }
 
+// Best-effort project discovery, done at key-test time — not during a
+// generation, and never as a generation itself. A Vertex key alone
+// carries no project id, so there is no way to build the global
+// project endpoint from the key itself. This probe asks the Express
+// endpoint for one model's metadata; if the server answers with the
+// same projects/<id>/locations/<non-global>/... 404 that a generation
+// would hit, the project id is parsed and cached, and every later
+// generation can start at the global endpoint in one call. Any other
+// outcome (model info, auth error, network error) is simply ignored:
+// discovery then falls back to the first generation's 404, as before.
+export async function discoverVertexProjectId(apiKey: string): Promise<string | null> {
+  const key = apiKey.trim();
+  if (!isVertexExpressKey(key)) return null;
+  const cached = getCachedVertexProjectId(key);
+  if (cached) return cached;
+  try {
+    const res = await fetch(
+      "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-nano-banana-2.1",
+      { headers: { "x-goog-api-key": key } },
+    );
+    if (res.ok) return null;
+    const text = await res.text();
+    const parsed = parseVertexLocationError(text);
+    if (parsed && parsed.location !== "global") {
+      saveVertexProjectId(key, parsed.project);
+      return parsed.project;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Exact endpoint for one backend + one model. The Express endpoint
 // has no projects/, no locations/, no region. The project-global
 // endpoint is used only after a Vertex 404 names a project (see the

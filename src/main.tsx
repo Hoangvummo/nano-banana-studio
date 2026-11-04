@@ -24,7 +24,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { generateImage, getCachedVertexProjectId, isAbortError, listModels, saveVertexProjectId } from "./lib/gemini";
+import { discoverVertexProjectId, generateImage, getCachedVertexProjectId, isAbortError, listModels, saveVertexProjectId } from "./lib/gemini";
 import {
   ASPECT_RATIOS,
   DEFAULT_MODEL,
@@ -246,6 +246,17 @@ function App() {
     }
   }, [model, imageSize]);
 
+  // When the settings modal opens, refill the project field from the
+  // cache if it is empty. Without this, a project discovered during a
+  // generation would stay invisible in the field, and pressing
+  // "Lưu & Kiểm tra" with the empty field would wipe that cache —
+  // which is exactly why generations kept re-discovering it.
+  useEffect(() => {
+    if (!settingsOpen || vertexProjectId || !apiKey.trim()) return;
+    const cachedProject = getCachedVertexProjectId(apiKey.trim());
+    if (cachedProject) setVertexProjectId(cachedProject);
+  }, [settingsOpen, apiKey, vertexProjectId]);
+
   useEffect(() => {
     if (!successToast) return;
     const timer = window.setTimeout(() => setSuccessToast(""), 2600);
@@ -297,10 +308,24 @@ function App() {
       const imageModels = STUDIO_MODELS.filter((item) => hasModelAccess(names, item.id));
       setAvailableModels(names);
 
+      // Discover the project now (best-effort, no image generated) so
+      // later generations can start at the global endpoint in one
+      // call instead of erroring on Express first. If the field is
+      // already filled, it wins; if discovery finds nothing, the
+      // existing field value (possibly empty) is kept as-is.
+      let projectToSave = vertexProjectId;
+      if (!projectToSave.trim() && apiKey.trim().startsWith("AQ.")) {
+        const discovered = await discoverVertexProjectId(apiKey.trim());
+        if (discovered) {
+          projectToSave = discovered;
+          setVertexProjectId(discovered);
+        }
+      }
+
       try {
         if (rememberKey) {
           localStorage.setItem("nano-banana-api-key", apiKey.trim());
-          saveVertexProjectId(apiKey.trim(), vertexProjectId);
+          saveVertexProjectId(apiKey.trim(), projectToSave);
         } else {
           localStorage.removeItem("nano-banana-api-key");
           saveVertexProjectId(apiKey.trim(), "");
@@ -443,7 +468,11 @@ function App() {
         try {
           const generatedList = await generateImage({
             apiKey: apiKey.trim(),
-            vertexProjectId: vertexProjectId.trim() || undefined,
+            // The field may be stale (discovery happens in gemini.ts),
+            // so always consult the cache too: a known project means
+            // this generation starts at the global endpoint directly.
+            vertexProjectId:
+              vertexProjectId.trim() || getCachedVertexProjectId(apiKey.trim()) || undefined,
             model: task.model,
             prompt: task.prompt,
             references: task.references,
