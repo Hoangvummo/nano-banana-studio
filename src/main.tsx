@@ -24,7 +24,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { generateImage, isAbortError, listModels } from "./lib/gemini";
+import { generateImage, getCachedVertexProjectId, isAbortError, listModels, saveVertexProjectId } from "./lib/gemini";
 import {
   ASPECT_RATIOS,
   DEFAULT_MODEL,
@@ -168,6 +168,7 @@ const posePresets = [
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [vertexProjectId, setVertexProjectId] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
   const [apiStatus, setApiStatus] = useState<"idle" | "checking" | "ready" | "error">("idle");
   const [apiMessage, setApiMessage] = useState("API key not tested yet.");
@@ -231,6 +232,8 @@ function App() {
         setRememberKey(true);
         setApiStatus("ready");
         setApiMessage("Saved API key loaded.");
+        const cachedProject = getCachedVertexProjectId(saved);
+        if (cachedProject) setVertexProjectId(cachedProject);
       }
     } catch {
       // Ignore storage errors
@@ -295,8 +298,13 @@ function App() {
       setAvailableModels(names);
 
       try {
-        if (rememberKey) localStorage.setItem("nano-banana-api-key", apiKey.trim());
-        else localStorage.removeItem("nano-banana-api-key");
+        if (rememberKey) {
+          localStorage.setItem("nano-banana-api-key", apiKey.trim());
+          saveVertexProjectId(apiKey.trim(), vertexProjectId);
+        } else {
+          localStorage.removeItem("nano-banana-api-key");
+          saveVertexProjectId(apiKey.trim(), "");
+        }
       } catch {
         // Ignore storage errors
       }
@@ -435,6 +443,7 @@ function App() {
         try {
           const generatedList = await generateImage({
             apiKey: apiKey.trim(),
+            vertexProjectId: vertexProjectId.trim() || undefined,
             model: task.model,
             prompt: task.prompt,
             references: task.references,
@@ -1270,6 +1279,19 @@ function App() {
                   <span>{apiStatus === "checking" ? "Đang kiểm tra..." : "Lưu & Kiểm tra"}</span>
                 </button>
               </div>
+
+              <label className="modal-field-label">Vertex project ID (tùy chọn, chỉ dùng cho key AQ...)</label>
+              <div className="api-input-row">
+                <input
+                  type="text"
+                  value={vertexProjectId}
+                  onChange={(e) => setVertexProjectId(e.target.value)}
+                  placeholder="VD: 123456789012 — có sẵn thì mọi model đi thẳng đường global, tạo 1 lần là ra"
+                />
+              </div>
+              <p style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                Để trống cũng được: app sẽ tự tìm project id từ lỗi 404 lần đầu rồi nhớ lại cho những lần sau.
+              </p>
 
               <label className="checkbox-row">
                 <input

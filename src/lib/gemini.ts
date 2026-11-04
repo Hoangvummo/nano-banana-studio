@@ -33,6 +33,18 @@ import { buildReferenceInstruction } from "./prompt";
  *     us-central1), where global-only models are not served; the
  *     standard global endpoint is the route a Vertex console test
  *     uses, and it serves those same models for that project.
+ *   - Route order for Vertex keys (all models, not just 2.1): if a
+ *     project id is known — entered in settings, or discovered from
+ *     an earlier 404 and cached in this browser — the global project
+ *     endpoint is tried FIRST, so generation succeeds in one call
+ *     with no error-then-switch. Only when no project is known does
+ *     the call start at the Express endpoint and, on that specific
+ *     404, switch to the global endpoint for the parsed project (and
+ *     cache it for the next calls). A failed global attempt falls
+ *     back to Express, and a failed Express attempt falls forward to
+ *     the parsed global project; each route is tried at most once
+ *     per generation, except for rate-limit retries, which stay on
+ *     the route that is actually working.
  *   - Any other key (e.g. "AIza...") = Gemini Developer API:
  *       POST https://generativelanguage.googleapis.com/v1beta/models/<apiName>:streamGenerateContent?alt=sse
  *     Auth: same `x-goog-api-key` header.
@@ -113,6 +125,45 @@ function resolveBackend(apiKey: string): ApiBackend {
 
 function isVertexExpressKey(apiKey: string) {
   return apiKey.trim().startsWith("AQ.");
+}
+
+// A discovered Vertex project id is not a secret (it appears in the
+// server's own 404 messages), but it is cached per key so that a later
+// generation can go straight to the global project endpoint in one
+// call instead of erroring on Express first. The hint only guards
+// against reusing a project cached for a different key.
+const VERTEX_PROJECT_CACHE_KEY = "nano-banana-vertex-project-id";
+const VERTEX_PROJECT_KEY_HINT_KEY = "nano-banana-vertex-project-key-hint";
+
+function vertexKeyHint(apiKey: string): string {
+  const key = apiKey.trim();
+  return key.length >= 8 ? `${key.slice(0, 4)}:${key.slice(-4)}` : key;
+}
+
+export function getCachedVertexProjectId(apiKey: string): string | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    if (localStorage.getItem(VERTEX_PROJECT_KEY_HINT_KEY) !== vertexKeyHint(apiKey)) return null;
+    return localStorage.getItem(VERTEX_PROJECT_CACHE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveVertexProjectId(apiKey: string, projectId: string) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    const project = projectId.trim();
+    if (!project) {
+      localStorage.removeItem(VERTEX_PROJECT_CACHE_KEY);
+      localStorage.removeItem(VERTEX_PROJECT_KEY_HINT_KEY);
+      return;
+    }
+    localStorage.setItem(VERTEX_PROJECT_CACHE_KEY, project);
+    localStorage.setItem(VERTEX_PROJECT_KEY_HINT_KEY, vertexKeyHint(apiKey));
+  } catch {
+    // Storage is best-effort; generation still works without it.
+  }
 }
 
 // Exact endpoint for one backend + one model. The Express endpoint
@@ -223,11 +274,84 @@ async function generateSingleImageWithRetry(
   // Exact model only: no fallback to a *-preview alias or another model.
   // If this model is not found / not supported, that error is surfaced
   // as-is instead of silently generating with a different model.
+  // Routes are endpoints only: every route below calls the SAME model
+  // with the SAME key.
   const apiName = selectedModelApiName(options.model);
-  let attempt = 0;
-  let projectGlobal: string | null = null;
-  let triedProjectGlobal = false;
 
+  // Gemini API keys have a single route. Vertex keys try, in order:
+  //   1. the global project endpoint, when a project id is known
+  //      (entered in settings, or cached from an earlier 404) — this
+  //      is the one-call path for every model;
+  //   2. the Express endpoint, when no project is known, or when the
+  //      known global project failed (it may be stale for this key).
+  // A Vertex 404 from Express that names a project appends that
+  // project's global endpoint as a further route and caches it.
+  const routes: Array<string | null> = [];
+  const seenRoutes = new Set<string>();
+  const addRoute = (projectGlobal: string | null) => {
+    const key = projectGlobal ?? "express";
+    if (seenRoutes.has(key)) return;
+    seenRoutes.add(key);
+    routes.push(projectGlobal);
+  };
+  if (backend === "vertex-express") {
+    const knownProject = options.vertexProjectId?.trim() || getCachedVertexProjectId(options.apiKey);
+    if (knownProject) addRoute(knownProject);
+    addRoute(null);
+  } else {
+    addRoute(null);
+  }
+
+  let lastError: unknown = null;
+  for (let i = 0; i < routes.length; i += 1) {
+    const route = routes[i] as string | null;
+    try {
+      return await attemptRouteWithRateRetry(backend, apiName, options, route);
+    } catch (err) {
+      if (isAbortError(err) || options.signal?.aborted) {
+        throw createAbortError();
+      }
+      lastError = err;
+      const errMessage = readGenerationError(err);
+
+      // Express 404 -> global project route (and cache it, so the
+      // next generation starts there in one call).
+      if (backend === "vertex-express" && route === null) {
+        const vertexLocation = parseVertexLocationError(errMessage);
+        if (vertexLocation && vertexLocation.location !== "global") {
+          saveVertexProjectId(options.apiKey, vertexLocation.project);
+          addRoute(vertexLocation.project);
+        }
+      }
+
+      if (i < routes.length - 1) {
+        const nextIsGlobal = routes[i + 1] !== null;
+        options.onStatus?.(
+          nextIsGlobal
+            ? `Đang thử lại cùng model ở đường global cho project này...`
+            : `Đang thử lại cùng model ở đường Express...`,
+        );
+        continue;
+      }
+      throw new Error(errMessage);
+    }
+  }
+  // Unreachable: routes always has at least one entry.
+  throw new Error(readGenerationError(lastError));
+}
+
+// One route, with the standing retry policy: rate limits and transient
+// errors retry the SAME model on the SAME route indefinitely (backoff
+// capped at 60s, abortable); a config rejection gets one minimal-config
+// retry on the same route; anything else fails immediately so the
+// caller can try the next route.
+async function attemptRouteWithRateRetry(
+  backend: ApiBackend,
+  apiName: string,
+  options: GenerationOptions,
+  projectGlobal: string | null,
+): Promise<GeneratedImage> {
+  let attempt = 0;
   for (;;) {
     throwIfAborted(options.signal);
 
@@ -257,29 +381,6 @@ async function generateSingleImageWithRetry(
 
     const errMessage = readGenerationError(lastError);
 
-    // Vertex location redirect (same model, different endpoint only):
-    // the Express endpoint resolves the key to the project's signup
-    // location, but global-only models are not served there. If the
-    // 404 names that project/location, retry once at the standard
-    // global project endpoint — the route a Vertex console test uses.
-    // If the global attempt also 404s, the error below is surfaced
-    // as-is. This applies to every model, not just 2.1, and never
-    // applies to Gemini API keys (they have no project path).
-    if (backend === "vertex-express" && !triedProjectGlobal) {
-      const vertexLocation = parseVertexLocationError(errMessage);
-      if (vertexLocation && vertexLocation.location !== "global") {
-        triedProjectGlobal = true;
-        projectGlobal = vertexLocation.project;
-        options.onStatus?.(
-          `Model này không có ở ${vertexLocation.location} qua đường Express, đang thử lại cùng model ở locations/global cho project này...`,
-        );
-        continue;
-      }
-    }
-
-    // Rate limits, quota exhaustion and transient server/network
-    // errors: wait and retry the SAME model until it succeeds or the
-    // user cancels. There is no attempt cap here by design.
     if (isRetryableError(errMessage)) {
       const waitMs = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
       const waitSeconds = (waitMs / 1000).toFixed(1);

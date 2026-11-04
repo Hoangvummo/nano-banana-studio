@@ -41,6 +41,10 @@ export interface GeneratedImage {
 
 export interface GenerationOptions {
   apiKey: string;
+  // Optional Vertex project id. When set, Vertex keys go straight to
+  // the global project endpoint in one call; when unset, gemini.ts
+  // uses a cached discovered project, or the Express endpoint first.
+  vertexProjectId?: string;
   model: ModelId;
   prompt: string;
   references: ReferenceImage[];
