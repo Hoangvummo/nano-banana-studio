@@ -16,10 +16,23 @@ import { buildReferenceInstruction } from "./prompt";
  *
  * Backend, decided ONLY by the key prefix — never by the model:
  *   - Key starting with "AQ."  = Vertex AI / Gemini Enterprise in
- *     Express Mode. Endpoint (the documented Express endpoint, global,
- *     no project, no location anywhere in the URL):
+ *     Express Mode. First endpoint (the documented Express endpoint,
+ *     global, no project, no location anywhere in the URL):
  *       POST https://aiplatform.googleapis.com/v1/publishers/google/models/<apiName>:streamGenerateContent?alt=sse
  *     Auth: header `x-goog-api-key: <key>`.
+ *     Second endpoint, only for Vertex keys, only on a 404 that names
+ *     a projects/<id>/locations/<non-global>/... path: the SAME model
+ *     at the standard global project endpoint, with the project id
+ *     parsed from that 404 message itself (never hard-coded):
+ *       POST https://aiplatform.googleapis.com/v1/projects/<id>/locations/global/publishers/google/models/<apiName>:streamGenerateContent?alt=sse
+ *     This is a location redirect, not a model redirect, and it is
+ *     possible here precisely because the call is plain REST: the
+ *     browser SDK could never make it, since its constructor throws
+ *     on any project/location option. The Express endpoint resolves
+ *     an Express key to the project's signup location (e.g.
+ *     us-central1), where global-only models are not served; the
+ *     standard global endpoint is the route a Vertex console test
+ *     uses, and it serves those same models for that project.
  *   - Any other key (e.g. "AIza...") = Gemini Developer API:
  *       POST https://generativelanguage.googleapis.com/v1beta/models/<apiName>:streamGenerateContent?alt=sse
  *     Auth: same `x-goog-api-key` header.
@@ -102,14 +115,41 @@ function isVertexExpressKey(apiKey: string) {
   return apiKey.trim().startsWith("AQ.");
 }
 
-// Exact endpoint for one backend + one model. Note what is absent:
-// no projects/, no locations/, no region — for either backend.
-function endpointFor(backend: ApiBackend, apiName: string, stream: boolean): string {
+// Exact endpoint for one backend + one model. The Express endpoint
+// has no projects/, no locations/, no region. The project-global
+// endpoint is used only after a Vertex 404 names a project (see the
+// header comment); it is still the same model, same key, same header.
+function endpointFor(
+  backend: ApiBackend,
+  apiName: string,
+  stream: boolean,
+  projectGlobal?: string | null,
+): string {
   const action = stream ? "streamGenerateContent?alt=sse" : "generateContent";
   if (backend === "vertex-express") {
+    if (projectGlobal) {
+      return `https://aiplatform.googleapis.com/v1/projects/${projectGlobal}/locations/global/publishers/google/models/${apiName}:${action}`;
+    }
     return `https://aiplatform.googleapis.com/v1/publishers/google/models/${apiName}:${action}`;
   }
   return `https://generativelanguage.googleapis.com/v1beta/models/${apiName}:${action}`;
+}
+
+// Parse a Vertex NOT_FOUND like:
+// Publisher model `projects/<project-id>/locations/us-central1/publishers/google/models/gemini-nano-banana-2.1`
+// was not found ... Returns null when the message is not that shape.
+function parseVertexLocationError(
+  message: string,
+): { project: string; location: string } | null {
+  const lower = message.toLowerCase();
+  if (!lower.includes("404") && !lower.includes("not_found") && !lower.includes("not found")) {
+    return null;
+  }
+  const match = message.match(
+    /projects\/([A-Za-z0-9_-]+)\/locations\/([A-Za-z0-9_-]+)\/publishers\/google\/models\//,
+  );
+  if (!match) return null;
+  return { project: match[1], location: match[2] };
 }
 
 export async function listModels(apiKey: string): Promise<ListedModel[]> {
@@ -185,13 +225,15 @@ async function generateSingleImageWithRetry(
   // as-is instead of silently generating with a different model.
   const apiName = selectedModelApiName(options.model);
   let attempt = 0;
+  let projectGlobal: string | null = null;
+  let triedProjectGlobal = false;
 
   for (;;) {
     throwIfAborted(options.signal);
 
     let lastError: unknown = null;
     try {
-      return await executeModelGeneration(backend, apiName, options, false);
+      return await executeModelGeneration(backend, apiName, options, false, projectGlobal);
     } catch (err) {
       if (isAbortError(err) || options.signal?.aborted) {
         throw createAbortError();
@@ -203,7 +245,7 @@ async function generateSingleImageWithRetry(
       // a model redirect.
       if (isInvalidConfigError(readGenerationError(err))) {
         try {
-          return await executeModelGeneration(backend, apiName, options, true);
+          return await executeModelGeneration(backend, apiName, options, true, projectGlobal);
         } catch (minimalErr) {
           if (isAbortError(minimalErr) || options.signal?.aborted) {
             throw createAbortError();
@@ -214,6 +256,26 @@ async function generateSingleImageWithRetry(
     }
 
     const errMessage = readGenerationError(lastError);
+
+    // Vertex location redirect (same model, different endpoint only):
+    // the Express endpoint resolves the key to the project's signup
+    // location, but global-only models are not served there. If the
+    // 404 names that project/location, retry once at the standard
+    // global project endpoint — the route a Vertex console test uses.
+    // If the global attempt also 404s, the error below is surfaced
+    // as-is. This applies to every model, not just 2.1, and never
+    // applies to Gemini API keys (they have no project path).
+    if (backend === "vertex-express" && !triedProjectGlobal) {
+      const vertexLocation = parseVertexLocationError(errMessage);
+      if (vertexLocation && vertexLocation.location !== "global") {
+        triedProjectGlobal = true;
+        projectGlobal = vertexLocation.project;
+        options.onStatus?.(
+          `Model này không có ở ${vertexLocation.location} qua đường Express, đang thử lại cùng model ở locations/global cho project này...`,
+        );
+        continue;
+      }
+    }
 
     // Rate limits, quota exhaustion and transient server/network
     // errors: wait and retry the SAME model until it succeeds or the
@@ -240,6 +302,7 @@ async function executeModelGeneration(
   apiName: string,
   options: GenerationOptions,
   minimalConfig: boolean,
+  projectGlobal?: string | null,
 ): Promise<GeneratedImage> {
   const body = buildRequestBody(backend, options, minimalConfig);
   const state: GenerationState = {
@@ -252,7 +315,7 @@ async function executeModelGeneration(
     finishReason: "",
   };
 
-  const streamRes = await fetch(endpointFor(backend, apiName, true), {
+  const streamRes = await fetch(endpointFor(backend, apiName, true, projectGlobal), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -276,7 +339,7 @@ async function executeModelGeneration(
 
   if (!resolvedImageData && state.finishReason !== "SAFETY" && !options.signal?.aborted) {
     options.onStatus?.("Đang tải dữ liệu ảnh hoàn chỉnh...");
-    const singleRes = await fetch(endpointFor(backend, apiName, false), {
+    const singleRes = await fetch(endpointFor(backend, apiName, false, projectGlobal), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
