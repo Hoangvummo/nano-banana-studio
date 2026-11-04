@@ -2,6 +2,7 @@ import type { GenerationOptions, GeneratedImage, ListedModel, ModelId } from "..
 import { splitDataUrl } from "./image";
 import { STUDIO_MODELS, is1KOnlyModel, selectedModelApiName } from "./models";
 import { buildReferenceInstruction } from "./prompt";
+import { LANUPE_MUSE } from "./lanupeStyle";
 
 /*
  * API CALLING RULES — one rule set for every studio model, both key types.
@@ -311,8 +312,8 @@ export async function generateAiPrompts(request: AiPromptRequest): Promise<strin
     "Every prompt must use editorial camera language: 85mm portrait lens, f/2.8, subject tack sharp, background clearly readable with gentle natural depth — not heavy bokeh, and not flat clinical sharpness everywhere. Skin must have visible real texture and subtle film grain, never plastic or over-smoothed.",
     "Keep only the SECTION structure from any example prompt (face, features, skin, face lighting, makeup, NEGATIVE, skin tone, outfit, posture, location, background, lighting, mood, colour, style, camera, additions). Do NOT copy any example's subject, setting, makeup, camera or wording: no sports theme, no arena, no f/22, no mobile-phone sensor, no porcelain or jelly skin.",
     request.hasFaceReference
-      ? "The user has attached a face reference: every prompt must say the face is exactly the same as the attached image, without alteration."
-      : "No face reference is attached: describe a natural model, rarely looking directly at the camera, rarely smiling broadly.",
+      ? "The user has attached a face reference: every prompt must say the face is exactly the same as the attached image, without alteration, and must NOT replace it with a generic model face."
+      : `No face reference is attached: every prompt must describe this exact studio muse, never a vague or generic model: ${LANUPE_MUSE.age}. ${LANUPE_MUSE.face}. Hair: ${LANUPE_MUSE.hair}. ${LANUPE_MUSE.figure}. Attitude: ${LANUPE_MUSE.attitude}. She rarely looks directly at the camera and rarely smiles broadly. NEGATIVE for the model: no older-looking or middle-aged model, no generic average face, no tired or dull-looking model.`,
     request.seed?.trim() ? `User idea to keep in all prompts: ${request.seed.trim()}.` : "",
     request.featureLabel ? `The prompt will be used for: ${request.featureLabel}.` : "",
     "STYLE PROFILE (lanupe_, from 50 surveyed posts; the product-only close-up direction is excluded):",

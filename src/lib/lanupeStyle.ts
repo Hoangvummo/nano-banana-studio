@@ -33,18 +33,47 @@ export interface LanupeDirection {
   notes: string;
 }
 
+// The studio muse used when NO face reference is attached.
+//
+// Why this exists: the old builder only said "a pretty face, natural
+// balanced features" with no age and no face at all, so the image
+// model defaulted to a generic, visibly older average face — the
+// "bà già xấu" look the user complained about. A vague beauty word
+// does not beat a model's default; a concrete young face does.
+//
+// This is a generic fictional fashion muse, NOT a copy of any real
+// person's likeness: it blends soft East Asian beauty with European
+// bone structure (the mix the user asked for), in the cool, detached
+// attitude seen in the lanupe_ reference photos the user sent
+// (Paris balcony, cafe terrace, hotel lobby: long light-brown hair,
+// fair skin, slim elegant figure, looking away, never cute-smiling).
+// When a face reference IS attached, this muse is never used — the
+// reference face wins, exactly as attached.
+export const LANUPE_MUSE = {
+  age: "a young adult woman, 24 to 28 years old, visibly youthful and fresh, never middle-aged or older-looking",
+  face: "Eurasian fashion muse blending soft East Asian beauty with European bone structure: oval face, softly high cheekbones, a refined straight nose with a slightly high bridge, a defined but soft jawline, full but natural lips, large almond-shaped eyes with soft double eyelids, long dark lashes, straight groomed dark brows",
+  hair: "long, thick, softly waved light-brown to dark-brown hair, centre or side part, healthy shine, moving naturally in a light breeze",
+  figure: "Tall, slim, elegant figure with long legs and a natural, healthy silhouette — a high-fashion model body, not a generic average body",
+  attitude:
+    "cool, detached, quietly confident editorial attitude: calm gaze, relaxed shoulders, chin level or slightly raised, striking but never cute, never sweetly smiling, never blank or tired",
+  skin: "clear fair to light warm skin with visible real texture and pores, subtle film grain, fresh and luminous, never grey, never orange, never plastic",
+};
+
 // DNA shared by almost every lanupe_ post, whatever the direction.
 export const LANUPE_COMMON = {
   framing:
     "vertical photo, full body or three-quarter body as the main frame, eye-level or slightly low camera, subject centred or slightly off-centre with breathing room around the outfit",
   expression:
-    "relaxed, natural expression, rarely looking directly at the camera and rarely smiling broadly — looking down, looking away, in profile, or from behind",
-  hair: "long straight or softly waved hair, blonde or black",
+    "relaxed, cool, detached expression, rarely looking directly at the camera and rarely smiling broadly — looking down, looking away, in profile, or from behind; when she does look at the camera, a calm, sharp, confident gaze, never cute and never tired",
+  hair: LANUPE_MUSE.hair,
+  muse: `${LANUPE_MUSE.age}. ${LANUPE_MUSE.face}. ${LANUPE_MUSE.figure}. Attitude: ${LANUPE_MUSE.attitude}.`,
   accessories: "large leather tote, small shoulder bag, woven bag, belt, sunglasses, fedora hat, boots or pointed high heels",
   grade:
     "warm, muted, slightly soft film-like grade, medium contrast, low saturation, soft natural skin, never neon and never harsh flash",
   multiFrame: "the same outfit is often shown from several angles, as a set",
   negatives: [
+    "no older-looking, middle-aged or mature-aged model, no tired or aged face, no heavy wrinkles or sagging skin",
+    "no generic average face, no plain or dull-looking model",
     "no heavy bokeh that erases the background",
     "no flat phone-snapshot look",
     "no clinical over-sharpening",
@@ -373,16 +402,18 @@ export function buildDetailedPrompt(input: DetailedPromptInput): string {
   const seed = input.seed?.trim();
   const faceLine = input.hasFaceReference
     ? "Please create a photo with a face that is exactly the same as the attached image, without alteration. Do not change the face shape, eyes, nose, mouth, hair style or skin tone from the reference."
-    : "Please create a photorealistic fashion photo of a woman with a natural, relaxed presence, fair smooth skin, a pretty face, a slender figure and a calm, confident expression.";
+    : `Please create a photorealistic fashion photo of ${LANUPE_MUSE.age}. ${LANUPE_MUSE.face}. She has ${LANUPE_MUSE.hair}. ${LANUPE_MUSE.figure}. Attitude: ${LANUPE_MUSE.attitude}.`;
   const sections = [
     `${faceLine} The style should be a lanupe_-style fashion portrait: ${direction.notes}`,
     seed ? `User idea to keep: ${seed}.` : "",
-    "• Facial features: Natural, balanced facial features, calm expression, groomed natural brows, natural lashes, no exaggerated eyes or lips.",
-    "• Skin / Face: Natural skin with visible real texture and pores, subtle film grain, soft warm finish. Skin must look real and photographed, not plastic, not airbrushed and not over-smoothed.",
+    input.hasFaceReference
+      ? "• Facial features: Exactly as in the attached face reference — do not beautify, age, reshape or replace it with a generic model face."
+      : `• Facial features: ${LANUPE_MUSE.face}. Youthful, fresh and striking — a face that could be a fashion editorial cover, not an average face. Calm, cool expression, groomed natural brows, long natural lashes, no exaggerated eyes or lips.`,
+    `• Skin / Face: ${LANUPE_MUSE.skin}. Skin must look real and photographed, not plastic, not airbrushed and not over-smoothed.`,
     "• Lighting on the face: Soft directional light on the face, matched to the scene lighting, with gentle shadow modelling that keeps the facial features readable without harsh contrast.",
     "• Makeup: Minimal natural makeup in neutral tones: a light touch of blush, a soft neutral lip colour, groomed natural brows. Fresh and understated, never heavy or theatrical.",
     `❌ NEGATIVE: ${LANUPE_COMMON.negatives.join(", ")}.`,
-    "• Skin tone: Natural skin tone, warm and realistic, with real texture, neither grey nor orange.",
+    "• Skin tone: Clear fair to light warm skin tone, fresh and luminous, with real texture, neither grey nor orange.",
     `• Outfit: ${outfit}. Every garment detail must stay exact: shape, fabric, colour, pattern, fit and stitching. ${input.hasOutfitReference ? "Use the clothing and footwear only from the attached outfit reference." : ""}`,
     `• Posture: ${pose}. Natural, feminine and authentic posture, coherent hands and feet, no stiff catalogue posing.`,
     `• Location: ${background}.`,
